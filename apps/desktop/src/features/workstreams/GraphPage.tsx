@@ -49,8 +49,10 @@ export function GraphPage({ id }: { id: string }) {
   const onMove = (node: string, pos: NodePosition) => void actions.run(`move:${id}`, "Could not save the position", () => api.ws.update({ ...w, layout: { ...w.layout, [node]: pos } }, w.revision));
   const onAdd = (f: NewSessionForm, inv: DriverInventory) => {
     const taken = new Set(w.nodes.map((n) => n.id));
-    const base = f.prompt.trim().split(/\s+/).slice(0, 3).join("-") || `${inv.driver}-agent`;
-    const name = (() => { let n = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-"); for (let i = 2; w.nodes.some((x) => x.name === n); i++) n = `${base}-${i}`; return n; })();
+    // The node's name is the name typed in the dialog (one name, as for any session); without one, the first words of its task.
+    const base = f.name.trim() || f.prompt.trim().split(/\s+/).slice(0, 3).join("-").toLowerCase().replace(/[^a-z0-9-]+/g, "-") || `${inv.driver}-agent`;
+    let name = base;
+    for (let i = 2; w.nodes.some((x) => x.name === name); i++) name = `${base}-${i}`;
     const node: WorkstreamNode = { id: nodeId(name, taken), name, role: "", description: "", session: null, launch: { host: f.host, driver: f.driver, cwd: f.cwd || null, model: f.model || null, mode: f.mode || null, first_prompt: f.prompt.trim() || null, resume: launchRequest(f).resume } };
     void actions.run(`add:${id}`, "Could not add the agent", () => api.ws.addNode({ workstream: id, node, position: null })).then((r) => r && setSel({ kind: "node", id: node.id }));
   };

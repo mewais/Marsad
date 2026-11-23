@@ -25,7 +25,7 @@ export function nodeStatus(nv: NodeView | undefined, s: SessionSnapshot | null |
   const say = (word: string) => ({ status: st, word: stale ? `${word} · last known` : word, stale });
   if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "handoff")) return say("Handoff waiting");
   if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "spawn")) return say("Spawn waiting");
-  return say(st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : s.phase.state === "exited" ? "Ended" : "Idle");
+  return say(st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : st === "ended" ? "Ended" : "Idle");
 }
 
 export interface WsSummary {
@@ -59,6 +59,7 @@ export function summary(v: WorkstreamView, isStale: (host: HostId) => boolean = 
     if (c.needs) parts.push({ cls: "needs", text: `${c.needs} need${c.needs === 1 ? "s" : ""} you`, icon: "needs" });
     if (c.failed) parts.push({ cls: "failed", text: `${c.failed} failed`, icon: "failed" });
     if (c.working) parts.push({ cls: "working", text: `${c.working} working`, icon: "working" });
+    if (c.ended) parts.push({ cls: "ended", text: `${c.ended} ended`, icon: "stop" });
     if (c.stale) parts.push({ cls: "idle", text: `${c.stale} last known`, icon: "clock" });
     if (!parts.length) parts.push({ cls: "idle", text: "All idle", icon: "idle" });
   }

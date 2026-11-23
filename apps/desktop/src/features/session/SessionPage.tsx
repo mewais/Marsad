@@ -2,10 +2,12 @@ import { permissionShort } from "../../lib/gatewords";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
+import { isTyping } from "../../shortcuts/registry";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { selectView, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, useSessionReach, useSessionView, useTranscriptOpen } from "../../state";
+import { canInterrupt, endPendingKey, escapeInterrupts, interruptPendingKey, notContinuableWords, phaseWord, selectView, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, usePending, useSessionReach, useSessionView, useTranscriptOpen } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, ErrorBoundary, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
+import { ContinueButton } from "../common/SessionBits";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { MediaCtx } from "../media/Parts";
@@ -94,7 +96,18 @@ export function SessionPage({ host, id, tab: tabParam }: { host: string; id: str
     return () => ro.disconnect();
   }, [slice !== undefined, tab]);
   useEscape(renaming != null, () => setRenaming(null));
-  useShortcut({ id: "session-back", keys: ["escape"], title: "Back to the Inbox", group: "Session", run: () => nav("/inbox") });
+  // Esc, innermost first: an open menu, dialog, preview or editor takes it (the escape stack, before these run). Then, with
+  // a turn running, it interrupts that turn and nothing else; when none is, it leaves the text field it is in, and once
+  // nothing has the focus it goes back to the Inbox. One key press does one of these.
+  // In the Terminal tab Esc belongs to the shell (vim, readline): none of these see it there.
+  const interruptPending = usePending(interruptPendingKey(key)) === "pending";
+  const inTerminal = () => !!document.activeElement?.closest(".xterm-box");
+  useShortcut({ id: "session-interrupt", keys: ["escape"], title: "Interrupt the turn that is running", group: "Session", allowInInput: true, priority: 2,
+    when: () => !inTerminal() && !!snap && escapeInterrupts(snap), run: () => { if (!interruptPending) void actions.interrupt(key); } });
+  useShortcut({ id: "session-blur", keys: ["escape"], title: "Leave the text field you are typing in", group: "Session", allowInInput: true, priority: 1,
+    when: () => !inTerminal() && isTyping(document.activeElement), run: () => (document.activeElement as HTMLElement | null)?.blur() });
+  useShortcut({ id: "session-back", keys: ["escape"], title: "Back to the Inbox (when no turn is running)", group: "Session", run: () => nav("/inbox") });
+  const endPending = usePending(endPendingKey(key)) === "pending";
 
   if (!snap || !v) {
     return (
@@ -109,8 +122,8 @@ export function SessionPage({ host, id, tab: tabParam }: { host: string; id: str
   const doneN = plan.filter((p) => p.status === "completed").length;
   const usage = usageSummary(snap);
   const mins = Math.max(1, Math.round((Date.now() - snap.created_at_ms) / 60000));
-  const pillLabel = v.status === "needs" && gates.length ? `Waiting for you · ${gateSummary(gates.map((g) => g.gate.gate_type))}` : undefined;
-  const live = snap.phase.state === "working" || snap.phase.state === "starting" || snap.phase.state === "needs_you";
+  const pillLabel = v.status === "needs" && gates.length ? `Waiting for you · ${gateSummary(gates.map((g) => g.gate.gate_type))}` : phaseWord(v);
+  const cont = v.cont;
 
   return (
     <>
@@ -132,13 +145,19 @@ export function SessionPage({ host, id, tab: tabParam }: { host: string; id: str
           {renaming == null ? <IconButton icon="edit" label="Rename session" disabled={!!reach} title={reach ?? "Rename session"} onClick={() => setRenaming(snap.display_name ?? "")} /> : null}
           <StatusPill status={v.status} label={pillLabel} stale={v.stale} />{v.stale ? <span className="lk">last known</span> : null}
           <span className="flex1" />
-          <Button size="sm" icon="pause" blocked={reach} disabled={!live || !snap.capabilities.interrupt} onClick={() => void actions.stop(key)}>Interrupt</Button>
-          {snap.phase.state === "exited" || snap.phase.state === "failed" || snap.phase.state === "lost" ? (
-            <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
+          {cont.kind === "running" ? (
+            <>
+              <Button size="sm" icon="pause" pending={interruptPending} blocked={reach} disabled={!canInterrupt(snap)} title="Cancel the current turn; the agent keeps running" onClick={() => void actions.interrupt(key)}>Interrupt</Button>
+              <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => void actions.endSession(key)}>End session</Button>
+            </>
           ) : (
-            <Button size="sm" icon="stop" blocked={reach} onClick={() => void actions.stopSession(key)}>Stop</Button>
+            <>
+              <ContinueButton view={v} />
+              <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
+            </>
           )}
         </div>
+        {cont.kind === "blocked" ? <div className="sd-ended" role="status" data-testid="continue-why"><Icon name="stop" size="sm" />{notContinuableWords(cont.why)}</div> : null}
         <div className="sd-meta">
           <span className="kv">{drv ? <DriverBadge driver={drv} /> : v.driver}{snap.cli_version ? <span className="faint mono">v{snap.cli_version}</span> : null}</span>
           {hostLink ? <span className="kv"><HostChip host={hostLink} /><ConnState host={hostLink} /></span> : null}

@@ -78,7 +78,7 @@ describe("every user action that sends to a session or launches one is a traced 
     await app.actions.command(s.key, { command: "set_mode", mode: "plan" });
     await app.actions.answerGate(s.key, "p-prisma", { choice: "allow" });
     await app.actions.answerQuestion(s.key, "q-cookies", { answers: { q: [SECRET] } });
-    await app.actions.stop(s.key);
+    await app.actions.interrupt(s.key);
     const ui = (await sent(12)).filter((e): e is Exclude<UiEvent, { ev: "ui.rpc" }> => e.ev !== "ui.rpc");
     expect(ui.map((e) => (e.ev === "ui.prompt" ? `prompt:${e.kind}:${e.chars}` : e.ev === "ui.command" ? e.command : e.ev))).toEqual(["prompt:slash:8", "set_model", "set_mode", "answer_gate", "answer_question", "interrupt"]);
     expect(JSON.stringify(ui)).not.toContain(SECRET);
@@ -91,10 +91,10 @@ describe("every user action that sends to a session or launches one is a traced 
   it("stopping and continuing a session are traced too", async () => {
     const { backend, app, sent } = await boot();
     const s = sessionByName(backend, "docs-search-index");
-    await app.actions.retry(s.key);
-    await app.actions.stopSession(s.key);
+    await app.actions.endSession(s.key);
+    await app.actions.continueSession(s.key);
     const events = await sent(4);
-    expect(events.filter((e) => e.ev === "ui.command").map((e) => (e as { command: string }).command)).toEqual(["continue", "stop"]);
+    expect(events.filter((e) => e.ev === "ui.command").map((e) => (e as { command: string }).command)).toEqual(["stop", "continue"]);
     expect(traced(backend, "sessions.continue")[0].trace).toBeTruthy();
     expect(traced(backend, "sessions.stop")[0].trace).toBe((events.find((e) => e.ev === "ui.command" && e.command === "stop") as { trace: string }).trace);
   });
@@ -145,11 +145,12 @@ describe("every user action that sends to a session or launches one is a traced 
   it("an error from the daemon is a ui.rpc with outcome error and the code", async () => {
     const { backend, app, sent } = await boot();
     const s = sessionByName(backend, "docs-search-index");
-    await app.actions.stopSession(s.key);
-    // The session is not running any more: the host refuses the prompt.
+    await app.actions.endSession(s.key);
+    // A prompt continues an ended session first; the host cannot start the agent again, so it refuses the prompt.
+    backend.failNextContinue(s.host, s.id, "the agent could not be started");
     expect(await app.actions.sendPrompt(s.key, "again")).toBe(false);
     const events = await sent(4);
-    expect(events.filter((e) => e.ev === "ui.rpc")[1]).toMatchObject({ method: "session.command", outcome: "error", code: "not_running" });
+    expect(events.filter((e) => e.ev === "ui.rpc")[1]).toMatchObject({ method: "session.command", outcome: "error", code: "continue_failed" });
   });
 
   it("a failure that is not an RPC error is an error outcome without a code; a code that is not shaped like one is not passed on", async () => {

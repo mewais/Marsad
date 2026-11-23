@@ -2,6 +2,7 @@
 import type { EdgeView } from "./EdgeView";
 import type { NodeView } from "./NodeView";
 import type { SpawnGateView } from "./SpawnGateView";
+import type { SpawnOutcomeView } from "./SpawnOutcomeView";
 import type { TopologySync } from "./TopologySync";
 import type { Workstream } from "./Workstream";
 import type { WorkstreamCost } from "./WorkstreamCost";
@@ -13,4 +14,10 @@ export type WorkstreamView = { workstream: Workstream, nodes: Array<NodeView>, e
 /**
  * Spawn gates waiting on its sessions.
  */
-pending_spawns: Array<SpawnGateView>, };
+pending_spawns: Array<SpawnGateView>, 
+/**
+ * The latest ended spawn requests of its agents (at most [`RECENT_SPAWNS`], newest first):
+ * launched, or why not. Requests of agents that are not nodes of any workstream are not
+ * listed.
+ */
+recent_spawns: Array<SpawnOutcomeView>, };

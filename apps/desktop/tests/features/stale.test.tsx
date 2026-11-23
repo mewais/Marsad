@@ -71,7 +71,7 @@ describe("sessions of a host that has not delivered its list over the current li
     expect(note).toHaveTextContent(/Last known state/);
     expect(note).toHaveTextContent(/win-build is not connected \(reconnecting\)/);
     expect(screen.getByRole("button", { name: /Interrupt/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Delete|Stop/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Delete|End session/ })).toBeDisabled();
     expect(await screen.findByTestId("composer-blocked")).toBeInTheDocument();
     expect(screen.getByText("last known")).toBeInTheDocument();
   });

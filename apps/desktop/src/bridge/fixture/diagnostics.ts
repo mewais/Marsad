@@ -171,7 +171,7 @@ function projectAgent(events: readonly SessionEvent[], i: number): Entry[] {
       return [nonNull({ ev: "gate.raised" as const, request_id: g.request_id, gate_type: g.gate_type, choices: g.gate_type === "question" ? 0 : g.choices.length, tool: g.gate_type === "permission" ? g.tool_name : undefined })];
     }
     case "gate_resolved":
-      return [nonNull({ ev: "gate.resolved" as const, request_id: a.request_id, reason: a.reason })];
+      return [nonNull({ ev: "gate.resolved" as const, request_id: a.request_id, reason: a.reason?.code })];
     case "model_changed":
       return [{ ev: "agent.model", model: a.model }];
     case "modes_updated":

@@ -282,3 +282,18 @@ export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
 }
+
+/** The runtime's code for a working directory it refused (`RuntimeError::WorkingDirectory`). */
+const BAD_WORKING_DIRECTORY = "bad_working_directory";
+
+/**
+ * The daemon's own message when a request was refused because of its working directory (it names
+ * the path as the user typed it), else `null`. The hub relays a host's refusal inside an
+ * `upstream` error (`data.cause`), so both shapes are read.
+ */
+export function workingDirectoryRefusal(e: unknown): string | null {
+  const r = e as Partial<W.RpcError> | undefined;
+  if (r?.code === BAD_WORKING_DIRECTORY) return r.message ?? null;
+  const data = r?.data as { marsad_error?: string; cause?: Partial<W.RpcError> } | null | undefined;
+  return data?.marsad_error === "upstream" && data.cause?.code === BAD_WORKING_DIRECTORY ? data.cause.message ?? null : null;
+}

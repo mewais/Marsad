@@ -2,6 +2,7 @@
 import type { CompactionInfo } from "./CompactionInfo";
 import type { ContentPart } from "./ContentPart";
 import type { EndReason } from "./EndReason";
+import type { GateReason } from "./GateReason";
 import type { GateRequest } from "./GateRequest";
 import type { InputDropReason } from "./InputDropReason";
 import type { InputId } from "./InputId";
@@ -113,7 +114,7 @@ parts?: Array<ContentPart>, } | { "type": "tool_call_finished", call_id: string,
  * Images / files the result carries (claude `tool_result` image blocks, ACP tool
  * content), in order. Text stays in `result`.
  */
-parts?: Array<ContentPart>, } | { "type": "gate_requested", gate: GateRequest, } | { "type": "gate_resolved", request_id: string, reason?: string | null, } | { "type": "usage_update", usage: Usage, 
+parts?: Array<ContentPart>, } | { "type": "gate_requested", gate: GateRequest, } | { "type": "gate_resolved", request_id: string, reason?: GateReason | null, } | { "type": "usage_update", usage: Usage, 
 /**
  * Context window fill in percent, when derivable.
  */

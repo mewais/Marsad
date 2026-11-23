@@ -82,7 +82,7 @@ export type Groups = Record<StatusKey, SessionKey[]>;
 
 /** Keys grouped by status; within a group newest activity first. Compare with `groupsEqual`. */
 export function selectGroups(s: AppState, f: Filters): Groups {
-  const out: Groups = { needs: [], failed: [], done: [], working: [], idle: [] };
+  const out: Groups = { needs: [], failed: [], done: [], working: [], idle: [], ended: [] };
   const rows: { v: SessionView; at: number }[] = [];
   for (const key of Object.keys(s.sessions)) {
     const v = selectView(s, key)!;
@@ -104,6 +104,7 @@ export interface Counts {
   done: number;
   working: number;
   idle: number;
+  ended: number;
   stale: number;
   total: number;
   todayCost: number;
@@ -111,7 +112,7 @@ export interface Counts {
 }
 
 export function selectCounts(s: AppState): Counts {
-  const c: Counts = { needs: 0, failed: 0, done: 0, working: 0, idle: 0, stale: 0, total: 0, todayCost: 0, todaySessions: 0 };
+  const c: Counts = { needs: 0, failed: 0, done: 0, working: 0, idle: 0, ended: 0, stale: 0, total: 0, todayCost: 0, todaySessions: 0 };
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
   for (const key of Object.keys(s.sessions)) {

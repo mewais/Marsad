@@ -6,7 +6,7 @@ import { toast } from "../../ui/toast";
 import { Button, Icon, Popover } from "../../ui";
 
 /** Project folder: free text, recent projects on this host, and a directory browser over `fs.list`. */
-export function ProjectField({ host, value, onChange, recent }: { host: HostId; value: string; onChange: (v: string) => void; recent: RecentProject[] }) {
+export function ProjectField({ host, value, onChange, recent, error }: { host: HostId; value: string; onChange: (v: string) => void; recent: RecentProject[]; error?: string | null }) {
   const api = useApi();
   const hv = useHost(host);
   // A WSL host's files are visible to Windows: offer the native picker rooted in the distro
@@ -23,12 +23,13 @@ export function ProjectField({ host, value, onChange, recent }: { host: HostId; 
       <label htmlFor="ns-cwd">Project folder</label>
       <div className="input">
         <Icon name="folder" size="sm" />
-        <input id="ns-cwd" value={value} onChange={(e) => onChange(e.target.value)} placeholder="~/src/project" spellCheck={false} />
+        <input id="ns-cwd" value={value} onChange={(e) => onChange(e.target.value)} placeholder="~/src/project" spellCheck={false} aria-invalid={error ? true : undefined} aria-describedby={error ? "ns-cwd-e" : undefined} />
         {native ? <button type="button" className="linkbtn" onClick={() => void pickNative()}>Windows picker…</button> : null}
         <Popover align="right" className="dirpop" trigger={({ props }) => <button type="button" className="linkbtn" {...props}>Browse…</button>}>
           {({ close }) => <DirBrowser host={host} start={value || "~"} onPick={(p) => { onChange(p); close(); }} />}
         </Popover>
       </div>
+      {error ? <span id="ns-cwd-e" className="err" role="alert" data-testid="ns-cwd-error">{error}</span> : null}
       {mine.length ? (
         <span className="hint recent-links">
           Recent:{" "}

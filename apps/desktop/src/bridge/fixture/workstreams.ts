@@ -1,5 +1,5 @@
 import type {
-  SpawnGateView, SpawnSettings,
+  EndCode, GateReason, GateRequest, SpawnGateView, SpawnOutcomeView, SpawnSettings,
   AddNode, Connect, EdgeHistoryRequest, EdgeRef, EdgeView, FromTemplate, HandoffGateView, LaunchReply, LaunchRequest, NodeRef, SaveTemplate, SessionSnapshot,
   TaskView, TemplateRef, Workstream, WorkstreamDraft, WorkstreamNode, WorkstreamRef, WorkstreamTemplate, WorkstreamUpdate, WorkstreamView, WorkstreamsEvent,
 } from "../wire";
@@ -71,8 +71,15 @@ function seedTasks(now: number): TaskView[] {
   ];
 }
 
+/** How the hub sees a spawn gate's end on the asking session: Wasl's own words for the runtime's (`process_ended`, `session_stopped`, `withdrawn`). */
+const SPAWN_END: Record<string, EndCode> = { process_ended: "session_ended", session_stopped: "session_ended", withdrawn: "gate_gone" };
+/** The most ended spawn requests a workstream view lists. */
+const RECENT_SPAWNS = 20;
+
 export class FixtureWorkstreams {
   docs = new Map<string, Workstream>();
+  /** Ended spawn requests per workstream, newest first. */
+  private spawns = new Map<string, SpawnOutcomeView[]>();
   templates: WorkstreamTemplate[];
   tasks: TaskView[];
 
@@ -81,6 +88,7 @@ export class FixtureWorkstreams {
     for (const d of seedDocs(now)) this.docs.set(d.id, d);
     this.templates = seedTemplates(now);
     this.tasks = seedTasks(now);
+    this.spawns.set("ws-ci", [{ request_id: "fx-repro", node: "lead", host: "hz", session: fixtureId(5), name: "ci-repro-windows", ended_ms: now - 40 * 60_000, end: { code: "launched" } }]);
   }
 
   private aid(w: Workstream, nodeId: string): string | null {
@@ -118,7 +126,7 @@ export class FixtureWorkstreams {
       for (const g of snap?.pending_gates ?? []) if (g.gate.gate_type === "spawn") pending_spawns.push({ node: n.id, host: n.session!.host, session: n.session!.session, raised_at_ms: g.raised_at_ms, gate: g.gate });
     }
     return {
-      workstream: w, nodes, edges, pending_spawns,
+      workstream: w, nodes, edges, pending_spawns, recent_spawns: this.spawns.get(w.id) ?? [],
       sync: [...new Set(nodes.map((n) => n.host))].map((host) => ({ host, applied: w.state === "draft" ? 0 : w.topology_version, error: null })),
       cost: { sessions_usd: Object.values(by_node).reduce((a, b) => a + b, 0), tasks_usd: edges.reduce((a, e) => a + e.cost_usd, 0), by_node },
     };
@@ -156,6 +164,23 @@ export class FixtureWorkstreams {
     if (w) this.core.emit({ kind: "upserted", workstream: this.view(w) });
   }
 
+  private record(w: Workstream, node: string, from: { host: string; session: string }, name: string, requestId: string, end: SpawnOutcomeView["end"], detail?: string) {
+    const entry: SpawnOutcomeView = { request_id: requestId, node, host: from.host, session: from.session, name, ended_ms: this.core.now(), end, ...(detail ? { detail } : {}) };
+    this.spawns.set(w.id, [entry, ...(this.spawns.get(w.id) ?? [])].slice(0, RECENT_SPAWNS));
+  }
+
+  /** A spawn gate left its asking session without the human's answer (its turn was interrupted, the session ended, its owner took it down). */
+  onGateEnded(host: string, session: string, gate: GateRequest, reason: GateReason) {
+    if (gate.gate_type !== "spawn") return;
+    for (const w of this.docs.values()) {
+      const n = w.nodes.find((x) => x.session?.host === host && x.session.session === session);
+      if (!n) continue;
+      this.record(w, n.id, { host, session }, gate.name, gate.request_id, { code: (SPAWN_END[reason.code] ?? reason.code) as EndCode }, reason.detail ?? undefined);
+      this.core.emit({ kind: "upserted", workstream: this.view(w) });
+      return;
+    }
+  }
+
   /** A spawn gate was answered: allow adds the worker (connected from the asker), "always" updates the policy. */
   onSpawnAnswer(requestId: string, choice: string) {
     for (const w of this.docs.values()) {
@@ -166,7 +191,12 @@ export class FixtureWorkstreams {
       if (!asker) continue;
       const snap = this.core.session(asker.session!.host, asker.session!.session)!;
       const g = snap.pending_gates.find((x) => x.gate.request_id === requestId)?.gate;
-      if (!g || g.gate_type !== "spawn" || choice === "deny") return;
+      if (!g || g.gate_type !== "spawn") return;
+      if (choice === "deny") {
+        this.record(w, asker.id, asker.session!, g.name, requestId, { code: "denied" });
+        this.core.emit({ kind: "upserted", workstream: this.view(w) });
+        return;
+      }
       const spawn = choice === "always_allow_spawning" ? { ...w.spawn, policy: "always_allow" as const }
         : choice === "always_allow_spawning_and_handoffs" ? { ...w.spawn, policy: "always_allow" as const, handoffs_always_allow: true } : w.spawn;
       let id = g.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -175,6 +205,7 @@ export class FixtureWorkstreams {
       const fresh: WorkstreamNode = { id, name: g.name, role: g.role, description: g.role, session: null, spawned_by: asker.id, spawn_request: requestId,
         launch: { host, driver: (g.details as { driver_id?: string } | null)?.driver_id ?? "claude", cwd: g.cwd, model: g.model ?? null, mode: g.mode ?? null, first_prompt: null } };
       const launched = this.launchNode(w, fresh);
+      this.record(w, asker.id, asker.session!, g.name, requestId, { code: "launched" });
       const policy = spawn.policy === "always_allow" && spawn.handoffs_always_allow ? "always_allow" as const : "ask" as const;
       this.put({ ...w, spawn, nodes: [...w.nodes, launched], edges: [...w.edges, { from: asker.id, to: id, policy }], topology_version: w.topology_version + 1 });
       return;

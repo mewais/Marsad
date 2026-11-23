@@ -6,6 +6,7 @@ import { methods as M } from "../wire";
 import { layerAt, mergeEffective, sameScope, seedLayers } from "./config";
 import { type ConversationFacts, conversationFacts, driverDef, type FixtureHost } from "./catalog";
 import { err } from "./runtime";
+import { expand, fsExists } from "./fs";
 import { FixtureWorkstreams } from "./workstreams";
 
 /** What the hub needs from the fixture core. */
@@ -154,8 +155,31 @@ export class FixtureHub {
     return mergeEffective({ driver: r.driver, base: driverDef(r.driver).config, layers, workstream: inWs });
   }
 
+  /**
+   * The one normalisation of a project folder (`wasit-runtime/src/cwd.rs`): a leading `~` is the home, anything else must be
+   * absolute, and it must exist. The host's refusal names the path as it was given, and reaches the app through the hub
+   * wrapped as an `upstream` error, like every host call the hub makes for a launch.
+   */
+  private folder(host: string, given: string): string {
+    const refuse = (message: string) => {
+      throw err("upstream", `sessions.create on ${host}: ${message}`, {
+        marsad_error: "upstream",
+        message: `sessions.create on ${host}: ${message}`,
+        cause: { code: "bad_working_directory", message, data: { error: "working_directory", message } },
+      });
+    };
+    const quoted = JSON.stringify(given);
+    if (!(given === "~" || given.startsWith("~/") || given.startsWith("/"))) {
+      return refuse(`working directory ${quoted} is not an absolute path (a leading ~ stands for the home directory of the user the host runs as; ~user and relative paths are not accepted)`);
+    }
+    const path = expand(given);
+    if (!fsExists(given).exists && path.startsWith("/home/dev/src/")) return refuse(`working directory ${quoted} does not exist (looked for ${JSON.stringify(path)})`);
+    return path;
+  }
+
   launch(r: LaunchRequest): LaunchReply {
     const host = r.host ?? "x1";
+    if (r.cwd) this.folder(host, r.cwd);
     const effective = this.effective({ host, driver: r.driver, project: r.cwd, workstream: r.workstream, overrides: r.overrides });
     const d = driverDef(r.driver);
     const id = `fxnew${String(this.n++).padStart(7, "a")}`.slice(0, 12);
@@ -163,7 +187,7 @@ export class FixtureHub {
     const fresh: Omit<SessionSnapshot, keyof ConversationFacts> = {
       id, driver: r.driver, cwd: r.cwd, labels: r.labels, created_at_ms: now, command: this.core.agentCommand(host, r.driver), capabilities: d.capabilities, prompt_input: d.prompt_input, phase: { state: "starting" }, generation: 1, pid: 5000 + this.n,
       native_session_id: r.resume.kind === "resume" ? r.resume.native_session_id : null, title: (r.first_prompt ?? "").slice(0, 80) || null, cli_version: d.version,
-      model: r.model ?? d.models.find((m) => m.is_default)?.id ?? null, mode: r.mode ?? d.modes[0]?.id ?? null, available_models: d.models, available_modes: d.modes,
+      display_name: r.name?.trim() || null, model: r.model ?? d.models.find((m) => m.is_default)?.id ?? null, mode: r.mode ?? d.modes[0]?.id ?? null, available_models: d.models, available_modes: d.modes,
       slash_commands: d.slash, pending_gates: [], turn: null, last_turn: null, turns_completed: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0 },
       live_usage: null, context_pct: 4, subagents: [], plan: [], last_activity_ms: now, exit: null, stderr_tail: [], cursor: 0, loaded: true,
     };

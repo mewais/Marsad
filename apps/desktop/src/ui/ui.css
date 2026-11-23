@@ -26,11 +26,13 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 .st.done{color:var(--done);background:var(--done-bg);border-color:var(--done-line)}
 .st.working{color:var(--working);background:var(--working-bg);border-color:var(--working-line)}
 .st.idle{color:var(--idle);background:var(--idle-bg);border-color:transparent}
+/* Ended: the process is gone, the session is kept. Outlined, so it never reads as idle. */
+.st.ended{color:var(--fg-3);background:transparent;border-color:var(--line-2)}
 .st.plain{background:transparent;border-color:transparent;padding:0;height:auto}
 /* Last known: where the session was, not what it is doing. */
 .st.stale{color:var(--fg-3);background:transparent;border:1px dashed var(--line-2);font-weight:500}
 .lk{font-size:11px;color:var(--fg-3);font-style:italic}
-.c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-accent{color:var(--accent)}
+.c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-ended{color:var(--fg-3)} .c-accent{color:var(--accent)}
 
 .drv{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:var(--fg-2)}
 .drv b{display:inline-grid;place-items:center;width:20px;height:18px;border-radius:4px;font:600 9.5px/1 var(--f-mono);border:1px solid currentColor;letter-spacing:-.02em}

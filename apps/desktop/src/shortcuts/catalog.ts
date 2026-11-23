@@ -8,6 +8,7 @@ type Entry = Pick<Shortcut, "id" | "keys" | "title" | "group">;
 export const SHORTCUT_CATALOG: Entry[] = [
   { id: "palette", keys: ["mod+k"], title: "Command palette", group: "Global" },
   { id: "help", keys: ["?"], title: "Show shortcuts", group: "Global" },
+  { id: "escape-overlay", keys: ["escape"], title: "Close the open menu, dialog, preview or editor (before anything else)", group: "Global" },
   { id: "new", keys: ["n"], title: "New session", group: "Global" },
   { id: "new-ws", keys: ["shift+n"], title: "New workstream", group: "Global" },
   { id: "go-inbox", keys: ["g", "i"], title: "Go to Inbox", group: "Global" },
@@ -24,7 +25,9 @@ export const SHORTCUT_CATALOG: Entry[] = [
   { id: "gate-allow", keys: ["a"], title: "Allow (the agent's first allow choice)", group: "Answering a gate" },
   { id: "gate-deny", keys: ["d"], title: "Deny", group: "Answering a gate" },
   { id: "gate-send", keys: ["enter"], title: "Send the answer", group: "Answering a gate" },
-  { id: "session-back", keys: ["escape"], title: "Back to the Inbox", group: "Session" },
+  { id: "session-interrupt", keys: ["escape"], title: "Interrupt the turn that is running", group: "Session" },
+  { id: "session-blur", keys: ["escape"], title: "Leave the text field you are typing in", group: "Session" },
+  { id: "session-back", keys: ["escape"], title: "Back to the Inbox (when no turn is running)", group: "Session" },
   { id: "ns-submit", keys: ["mod+enter"], title: "Start the session", group: "New session" },
   { id: "hosts-add", keys: ["a"], title: "Add host", group: "Hosts" },
   { id: "ws-review", keys: ["r"], title: "Review the waiting handoff", group: "Workstream" },

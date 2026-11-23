@@ -1,5 +1,7 @@
 import type { Api, PickedFile } from "../../bridge/api";
 import type { Attachment, HostId, PromptInput, SessionId } from "../../bridge/wire";
+import type { PromptFiles } from "../../state";
+import { sumBytes } from "../../state/diaglog";
 import { b64ToBytes, bytesToB64, formatBytes, mimeFromName } from "../media/fetch";
 
 /** A file chosen for the next prompt, not yet uploaded. */
@@ -109,4 +111,17 @@ export async function upload(api: Api, host: HostId, session: SessionId, f: Pend
     if (r.attachment) return r.attachment;
     if (last || bytes.length === 0) throw new Error(`the upload of ${f.name} did not finish`);
   }
+}
+
+/** What `actions.sendPrompt` needs of pending files: how many and how big (for the log), and the upload to the session's host. */
+export function promptFiles(api: Api, host: HostId, session: SessionId, files: PendingFile[]): PromptFiles {
+  return {
+    count: files.length,
+    bytes: sumBytes(files),
+    upload: async () => {
+      const done: Attachment[] = [];
+      for (const f of files) done.push(await upload(api, host, session, f));
+      return done;
+    },
+  };
 }

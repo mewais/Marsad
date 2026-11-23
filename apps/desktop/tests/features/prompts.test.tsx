@@ -29,14 +29,63 @@ describe("fixture backend: the daemon's contract for prompts", () => {
     expect(events[1]).toMatchObject({ kind: "started", first_input: (input as { input: number }).input });
   });
 
-  it("refuses a prompt to a session that is not running, as the runtime does, and journals nothing", async () => {
+  it("refuses any other command to a session that is not running, as the runtime does, and journals nothing", async () => {
     const b = quietBackend();
     const s = sessionByName(b, "docs-search-index");
     await b.request("sessions.stop", { id: s.id }, { host: s.host });
     const before = (await history(b, s)).length;
-    await expect(send(b, s, "hello?")).rejects.toMatchObject({ code: "not_running", message: "the session is not running: the session is exited", data: { error: "not_running", reason: "the session is exited" } });
+    await expect(b.request("session.command", { id: s.id, command: { command: "set_mode", mode: "plan" } }, { host: s.host })).rejects.toMatchObject({ code: "not_running", message: "the session is not running: the session is exited", data: { error: "not_running", reason: "the session is exited" } });
     expect((await history(b, s)).length).toBe(before);
   });
+
+  it("a prompt to an ended session continues it, then delivers it, in that order (the daemon owns the order)", async () => {
+    const b = quietBackend();
+    const s = sessionByName(b, "docs-search-index");
+    await b.request("sessions.stop", { id: s.id }, { host: s.host });
+    expect(b.snapshot(s.host, s.id)).toMatchObject({ continuable: true, not_continuable: null });
+    const generation = b.snapshot(s.host, s.id).generation;
+    await expect(send(b, s, "hello again")).resolves.toMatchObject({ outcome: "queued" });
+    // The reply came with the session starting again; the prompt waits for its handshake, then runs.
+    expect(b.snapshot(s.host, s.id)).toMatchObject({ generation: generation + 1, phase: { state: "starting" }, exit: null });
+    const events = await history(b, s);
+    const tail = kinds(events.slice(events.findIndex((e) => e.kind === "spawned" && e.generation === generation + 1)));
+    expect(tail.slice(0, 4)).toEqual(["spawned", "started", "phase", "input"]);
+    expect(events.find((e) => e.kind === "input" && e.command.command === "prompt" && e.command.text === "hello again")).toMatchObject({ status: { status: "queued" } });
+    await waitFor(() => expect(b.snapshot(s.host, s.id).phase.state).not.toBe("starting"));
+  });
+
+  it("a prompt to an ended session that cannot be continued is refused with continue_failed and the rule, and journals nothing", async () => {
+    const b = quietBackend();
+    // A session that never reached its agent's first message has no conversation saved: nothing to continue.
+    const made = await b.request<LaunchReply>("sessions.launch", { host: "x1", driver: "claude", cwd: "~/src/ledgerline", resume: { kind: "new" }, labels: {}, workstream: null, overrides: { items: [], env: [], disallowed_tools: [] } });
+    await b.request("sessions.stop", { id: made.id }, { host: made.host });
+    const s = { host: made.host, id: made.id } as Ref;
+    expect(b.snapshot(s.host, s.id)).toMatchObject({ continuable: false, not_continuable: "no_conversation_id" });
+    const before = (await history(b, s)).length;
+    await expect(send(b, s, "anyone?")).rejects.toMatchObject({ code: "continue_failed", data: { error: "continue_failed", blocked: "no_conversation_id" } });
+    expect((await history(b, s)).length).toBe(before);
+  });
+
+  it("a continue that fails to start the agent is refused with its reason, and a later one works", async () => {
+    const b = quietBackend();
+    const s = sessionByName(b, "docs-search-index");
+    await b.request("sessions.stop", { id: s.id }, { host: s.host });
+    b.failNextContinue(s.host, s.id, "the agent binary was not found");
+    await expect(send(b, s, "hi")).rejects.toMatchObject({ code: "continue_failed", data: { reason: "the agent binary was not found" } });
+    expect(b.snapshot(s.host, s.id).phase.state).toBe("exited");
+    await expect(send(b, s, "hi")).resolves.toBeTruthy();
+  });
+
+  it("sessions.continue follows the runtime's rule: a running session is refused, an ended one starts again", async () => {
+    const b = quietBackend();
+    const s = sessionByName(b, "docs-search-index");
+    await expect(b.request("sessions.continue", { id: s.id }, { host: s.host })).rejects.toMatchObject({ code: "invalid_state" });
+    await b.request("sessions.stop", { id: s.id }, { host: s.host });
+    await b.request("sessions.continue", { id: s.id }, { host: s.host });
+    expect(b.snapshot(s.host, s.id)).toMatchObject({ phase: { state: "starting" }, continuable: false, not_continuable: "not_ended" });
+    await waitFor(() => expect(b.snapshot(s.host, s.id).phase.state).toBe("idle"));
+  });
+
 
   it("queues a prompt sent to a busy agent, journals its input_sent when it is taken, and drops it when the session is interrupted or stopped", async () => {
     // The scripted turns are slowed to a standstill, so only the commands move the session.
@@ -140,7 +189,7 @@ describe("session view: the first prompt and what became of each prompt", () => 
     await user.type(box, "and after that, lint{Enter}");
     const bubble = (await screen.findByText("and after that, lint")).closest(".msg-user") as HTMLElement;
     await waitFor(() => expect(bubble).toHaveAttribute("data-delivery", "queued"));
-    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await user.click(screen.getByRole("button", { name: "End session" }));
     await waitFor(() => expect(bubble).toHaveTextContent("Not sent — session ended"));
   });
 

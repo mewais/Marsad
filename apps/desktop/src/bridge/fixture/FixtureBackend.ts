@@ -4,7 +4,7 @@ import type {
   AttachmentPut,
   FileReadRequest,
   FilesStatRequest,
-  AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
+  AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateReason, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
   HostEnvironment, HostEnvSettings, HostRef, UiEvent, ExportRequest, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
 } from "../wire";
@@ -103,7 +103,12 @@ export class FixtureBackend implements Backend {
       hosts: () => [...this.hosts.values()].map((h) => ({ id: h.def.entry.id, up: this.isUp(h), link: h.def.link })),
       after: (ms, fn) => this.later(ms * this.opts.speed, fn),
     });
-    this.sim = new SessionSim({ now: this.opts.now, after: (ms, fn) => this.later(ms * this.opts.speed, fn), publish: (e) => this.publish(e) });
+    this.sim = new SessionSim({
+      now: this.opts.now,
+      after: (ms, fn) => this.later(ms * this.opts.speed, fn),
+      publish: (e) => this.publish(e),
+      gateEnded: (e, gate, reason) => this.hub.ws.onGateEnded(e.host, e.snap.id, gate, reason),
+    });
     for (const def of FIXTURE_HOSTS) {
       const d = structuredClone(def);
       if (d.link?.state === "reconnecting") d.link.next_at = nextAt(now + 4000);
@@ -403,7 +408,7 @@ export class FixtureBackend implements Backend {
         return reply;
       }
       case M.SESSIONS_CONTINUE:
-        this.sim.setPhase(this.entry(host, p as SessionRef), { state: "idle" });
+        this.sim.continueSession(this.entry(host, p as SessionRef));
         return {};
       case M.SESSIONS_RENAME: {
         const r = p as RenameSession;
@@ -745,9 +750,19 @@ export class FixtureBackend implements Backend {
     this.sim.raiseGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, gate);
   }
 
-  /** Withdraw a pending external gate, as if its request went away. */
-  withdrawGate(hostId: HostId, sessionId: string, requestId: string) {
-    this.sim.withdrawGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, requestId);
+  /** Withdraw a pending external gate, as if its request went away (`reason`: what the owner said; the legacy `withdrawn` when none). */
+  withdrawGate(hostId: HostId, sessionId: string, requestId: string, reason?: GateReason) {
+    this.sim.withdrawGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, requestId, reason);
+  }
+
+  /** Change facts of a session (tests): it is republished, with its conversation facts (`continuable`, `resume_command`) recomputed as the runtime does. */
+  patchSession(hostId: HostId, sessionId: string, p: Partial<SessionSnapshot>) {
+    this.sim.patch(this.hosts.get(hostId)!.sessions.get(sessionId)!, p);
+  }
+
+  /** The next start of a process for this session fails with `reason` (a prompt to it is then refused with `continue_failed`). */
+  failNextContinue(hostId: HostId, sessionId: string, reason: string) {
+    this.hosts.get(hostId)!.sessions.get(sessionId)!.continueFails = reason;
   }
 
   sessionIds(hostId: HostId): string[] {

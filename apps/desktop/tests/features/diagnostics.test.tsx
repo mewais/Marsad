@@ -339,10 +339,11 @@ describe("a session's Diagnostics tab", () => {
     await waitFor(() => expect(backend.requests.filter((r) => r.method === "session.command")).toHaveLength(1));
     await backend.request("sessions.stop", { id: s.id }, { host: s.host });
     await waitFor(() => expect(backend.snapshot(s.host, s.id).phase.state).toBe("exited"));
-    // The composer is off for a finished session: the refusal is sent as the app would send it.
+    // A prompt to an ended session continues it first; here the host cannot start the agent again, so it refuses the prompt.
+    backend.failNextContinue(s.host, s.id, "the agent could not be started");
     const trace = "u-00000000000000aa";
     backend.requests.length = 0;
-    await expect(backend.request("session.command", { id: s.id, command: { command: "prompt", text: "late" } }, { host: s.host, trace })).rejects.toMatchObject({ code: "not_running" });
+    await expect(backend.request("session.command", { id: s.id, command: { command: "prompt", text: "late" } }, { host: s.host, trace })).rejects.toMatchObject({ code: "continue_failed" });
     act(() => history.push(`/session/${s.host}/${s.id}?tab=diagnostics`));
     await within(await panel()).findAllByTestId("prompt-row");
     // The app did not record this one (it did not send it): what the daemons saw is not a prompt row of this panel.

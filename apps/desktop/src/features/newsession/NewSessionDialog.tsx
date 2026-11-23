@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DriverInventory, EffectiveConfig, PromptInput, RecentProject } from "../../bridge/wire";
-import { errorMessage } from "../../bridge/api";
-import { batchProblem, fromFile, fromPicked, revalidate, type PendingFile } from "../session/attachments";
+import { errorMessage, workingDirectoryRefusal } from "../../bridge/api";
+import { sessionKey } from "../../bridge/wire";
+import { batchProblem, fromFile, fromPicked, promptFiles, revalidate, type PendingFile } from "../session/attachments";
 import { PendingList } from "../session/Composer";
 import { setDraft } from "../session/draft";
 import { launchWithAttachments, type Step } from "./launch";
@@ -9,10 +10,10 @@ import { agoLong } from "../../lib/format";
 import { inShell } from "../../lib/shell";
 import { useNavigate, sessionPath } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, modelOptions, useActions, useApi, useAppState, useHosts, useReach } from "../../state";
-import { Button, Dialog, Icon, Kbd, SearchField, Segmented, Select, toast } from "../../ui";
+import { linkView, modelOptions, sessionName, useActions, useApi, useAppState, useHosts, useReach } from "../../state";
+import { Button, Dialog, Icon, Kbd, SearchField, Segmented, Select, TextField, toast } from "../../ui";
 import type { NewSessionPreset } from "../../shell/dialogs";
-import { defaultsFor, launchRequest, mostRecent, resumeRows, validate, type NewSessionForm } from "./model";
+import { defaultsFor, launchRequest, mostRecent, ownerNote, resumeRows, startTarget, validate, type NewSessionForm } from "./model";
 import { DriverPick, HostPick, ResumeList } from "./parts";
 import { ProjectField } from "./ProjectField";
 import { useInventory } from "./useInventory";
@@ -30,7 +31,7 @@ export interface NewSessionDialogProps {
   newOnly?: boolean;
 }
 
-const blank = (host: string): NewSessionForm => ({ host, driver: "", cwd: "", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "" });
+const blank = (host: string): NewSessionForm => ({ host, name: "", driver: "", cwd: "", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "" });
 
 export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title = "New session", subtitle = "Starts on the host you pick and appears in your inbox" }: NewSessionDialogProps) {
   const hosts = useHosts();
@@ -45,6 +46,8 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const [f, setF] = useState<NewSessionForm>(() => blank(firstUp));
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [q, setQ] = useState("");
+  // The host refused the project folder: its message, shown next to the field until the folder is edited.
+  const [cwdError, setCwdError] = useState<string | null>(null);
   const [eff, setEff] = useState<EffectiveConfig | null>(null);
   const set = (p: Partial<NewSessionForm>) => setF((x) => ({ ...x, ...p }));
   // Attachments of the first message: limits come from the chosen driver's descriptor on the chosen host.
@@ -103,6 +106,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     const host = preset?.host ?? (typeof settings["defaults.host"] === "string" ? (settings["defaults.host"] as string) : firstUp);
     setF({ ...blank(host), driver: preset?.driver ?? "", cwd: preset?.cwd ?? "" });
     setQ("");
+    setCwdError(null);
     setFiles([]);
     setDropped([]);
     setStep(null);
@@ -131,8 +135,12 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   }, [open, drivers, inv, settings]);
 
   const hostSessions = useMemo(() => Object.entries(allSessions).filter(([k]) => k.startsWith(f.host + "/")).map(([, s]) => s), [allSessions, f.host]);
+  const allRows = useMemo(() => resumeRows(inv, hostSessions), [inv, hostSessions]);
   const rows = useMemo(() => resumeRows(inv, hostSessions, q), [inv, hostSessions, q]);
-  const latest = mostRecent(useMemo(() => resumeRows(inv, hostSessions), [inv, hostSessions]));
+  const latest = mostRecent(allRows);
+  // A conversation that belongs to a Marsad session is that session's: open it, or continue it, instead of starting another.
+  const target = startTarget(f, allRows);
+  const owner = ownerNote(target);
 
   // Effective-config summary for this launch (preview; hub computes it).
   useEffect(() => {
@@ -148,9 +156,15 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     };
   }, [api, open, f.host, f.driver, f.cwd, inv?.installed]);
 
-  const problem = validate(f, inv, hostUp) || problemFiles || "";
+  const problem = validate(f, inv, hostUp, target) || problemFiles || "";
   const reach = useReach(f.host);
   const pk = "launch";
+  // The host refused the folder: say so next to the field (and keep the dialog as it is). Any other failure is a toast.
+  const refused = (e: unknown) => {
+    const why = workingDirectoryRefusal(e);
+    if (why) setCwdError(why);
+    return why !== null;
+  };
   const submit = async () => {
     if (problem || reach || !inv) return;
     if (onAdd) {
@@ -158,11 +172,14 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       onClose();
       return;
     }
+    setCwdError(null);
+    if (target.kind === "blocked") return; // `problem` says why
+    if (target.kind !== "launch") return resume(target);
     if (files.length && canAttach) {
       const text = f.prompt.trim();
       const out = await launchWithAttachments(api, launchRequest(f), text, files, setStep, actions.trace());
       setStep(null);
-      if (!out.ok && out.stage === "create") return toast({ tone: "err", title: "Could not start the session", detail: errorMessage(out.error) });
+      if (!out.ok && out.stage === "create") return refused(out.error) || toast({ tone: "err", title: "Could not start the session", detail: errorMessage(out.error) });
       onClose();
       const r = out.reply;
       if (!out.ok) {
@@ -176,12 +193,30 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       for (const u of r.unsupported) toast({ tone: "warn", title: "Started without one setting", detail: `${u.item}: ${u.reason}` });
       return nav(sessionPath(r.host, r.id));
     }
-    const r = await actions.launch(pk, launchRequest(f));
+    const r = await actions.launch(pk, launchRequest(f), { onError: refused });
     if (!r) return;
     onClose();
     toast({ tone: "ok", title: f.start === "continue" ? "Session continued" : "Session started", detail: `${inv.display_name} on ${host?.name ?? f.host}` });
     for (const u of r.unsupported) toast({ tone: "warn", title: "Started without one setting", detail: `${u.item}: ${u.reason}` });
     nav(sessionPath(r.host, r.id));
+  };
+  /**
+   * A conversation of a Marsad session: open it when it runs; else continue it, with the message typed here when there is one
+   * (a prompt to an ended session continues it and is then delivered, in that order, by the daemon).
+   */
+  const resume = async (t: Extract<typeof target, { kind: "open" | "continue" }>) => {
+    const h = f.host;
+    const id = t.session.id;
+    const key = sessionKey(h, id);
+    if (t.kind === "continue") {
+      const text = f.prompt.trim();
+      const ok = files.length && canAttach ? await actions.sendPrompt(key, text, promptFiles(api, h, id, files))
+        : text ? await actions.sendPrompt(key, text) : await actions.continueSession(key);
+      if (!ok) return;
+      files.forEach((x) => x.thumb && URL.revokeObjectURL(x.thumb));
+    }
+    onClose();
+    nav(sessionPath(h, id));
   };
   useShortcut({ id: "ns-submit", keys: ["mod+enter"], title: "Start the session", group: "New session", allowInInput: true, priority: 20, when: () => open, run: () => void submit() });
   const pending = useAppState((s) => !!s.pending[pk]) || !!step;
@@ -189,7 +224,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
 
   const changed = eff?.items.filter((i) => i.state !== "inherited").length ?? 0;
   const auto = eff?.items.filter((i) => i.state === "automatic").length ?? 0;
-  const verb = onAdd ? "Add to design" : f.start === "continue" ? "Continue session" : "Start session";
+  const verb = onAdd ? "Add to design" : target.kind === "open" ? "Open session" : f.start === "continue" ? "Continue session" : "Start session";
 
   return (
     <Dialog open={open} onClose={onClose} title={title} subtitle={subtitle} width={960} className="nsdlg"
@@ -198,16 +233,17 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
           <span className="faint ns-problem" role="status">{stepText || problem || reach || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
           <span className="sp" />
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon={onAdd ? "plus" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} blocked={reach} pending={pending} onClick={() => void submit()}>
+          <Button variant="primary" icon={onAdd ? "plus" : target.kind === "open" ? "chevr" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} blocked={reach} pending={pending} onClick={() => void submit()}>
             {verb} {onAdd ? null : <Kbd>Ctrl Enter</Kbd>}
           </Button>
         </>
       }>
       <div className="ns">
         <div className="col">
+          <TextField id="ns-name" label="Name" hint={target.kind === "continue" || target.kind === "open" ? "The session keeps its own name." : onAdd ? "Optional. The agent's name in this workstream (the first words of its task by default)." : "Optional. Shown in your Inbox; the first message by default."} value={target.kind === "continue" || target.kind === "open" ? sessionName(target.session) : f.name} disabled={target.kind === "continue" || target.kind === "open"} onChange={(e) => set({ name: e.target.value })} placeholder="Name this session" spellCheck={false} />
           <div className="field"><span className="lbl">Agent</span><DriverPick drivers={drivers} value={f.driver} onChange={(d) => set({ driver: d, ...defaultsFor(drivers.find((x) => x.driver === d)), resumeId: "" })} /></div>
           <div className="field"><span className="lbl">Host</span><HostPick hosts={hosts} value={f.host} onChange={(h) => set({ host: h, driver: "", resumeId: "" })} /></div>
-          <ProjectField host={f.host} value={f.cwd} onChange={(cwd) => set({ cwd, resumeId: "" })} recent={recent} />
+          <ProjectField host={f.host} value={f.cwd} onChange={(cwd) => { setCwdError(null); set({ cwd, resumeId: "" }); }} recent={recent} error={cwdError} />
           <div className="two">
             <div className="field"><span className="lbl">Model</span>
               <Select label="Model" value={f.model || undefined} placeholder={inv?.models.length ? "Select…" : "Reported after start"} options={modelOptions(inv?.models ?? [])} onChange={(model) => set({ model })} />
@@ -251,6 +287,12 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
                 <SearchField placeholder="Search title or first prompt" aria-label="Search sessions" value={q} onChange={(e) => setQ(e.target.value)} />
                 <span className="hint">{inv ? `${inv.sessions.length} ${inv.display_name} session${inv.sessions.length === 1 ? "" : "s"} in ${f.cwd || "this folder"} on ${host?.name}, including ones started in a terminal` : ""}</span>
                 {loading && !inv?.sessions.length ? <div className="faint">Looking for sessions…</div> : <ResumeList rows={rows} value={f.latest ? "" : f.resumeId} onChange={(resumeId) => set({ resumeId, latest: false })} />}
+                {owner ? (
+                  <div className="recent owned" role="status" data-testid="ns-owner">
+                    <Icon name={target.kind === "blocked" ? "warn" : "tower"} size="sm" />
+                    <div className="tx">{owner}</div>
+                  </div>
+                ) : null}
               </div>
             </>
           ) : null}

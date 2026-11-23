@@ -19,25 +19,33 @@ export interface Actions {
    * Fire-and-track any request: pending flag under `pk`, toast with the backend's message on failure.
    * A request that needs the daemon is not made while the app is not connected to it (or, with
    * `host`, while that host is not connected): it fails at once with the reason instead of waiting
-   * on the link. `local`: answered by the desktop shell itself, needs no daemon.
+   * on the link. `local`: answered by the desktop shell itself, needs no daemon. `onError`: the failure goes
+   * to the caller first; when it returns `true` it has shown the reason where the user is looking (next to the field,
+   * under the message box) and no toast is raised.
    */
-  run<T>(pk: string, failTitle: string, fn: () => Promise<T>, opts?: { keepSent?: boolean; host?: HostId; local?: boolean }): Promise<T | undefined>;
+  run<T>(pk: string, failTitle: string, fn: () => Promise<T>, opts?: { keepSent?: boolean; host?: HostId; local?: boolean; onError?: (e: unknown) => boolean | void }): Promise<T | undefined>;
   /** Fire a command at a session. Resolves true when the host accepted it. */
-  command(key: SessionKey, command: Command, opts?: { pendingKey?: string; failTitle?: string; keepSent?: boolean }): Promise<boolean>;
+  command(key: SessionKey, command: Command, opts?: { pendingKey?: string; failTitle?: string; keepSent?: boolean; onError?: (e: unknown) => boolean | void }): Promise<boolean>;
   answerGate(key: SessionKey, requestId: string, decision: GateDecision): Promise<boolean>;
   answerQuestion(key: SessionKey, requestId: string, answer: QuestionAnswer): Promise<boolean>;
-  /** Send a prompt; with `files`, upload them first and send them with it. Resolves true when the host accepted it. */
-  sendPrompt(key: SessionKey, text: string, files?: PromptFiles): Promise<boolean>;
+  /**
+   * Send a prompt; with `files`, upload them first and send them with it. Resolves true when the host accepted it.
+   * To an ended session the daemon continues it first and then delivers the prompt; it refuses with
+   * `continue_failed` (reason attached) when it cannot, and nothing was sent.
+   */
+  sendPrompt(key: SessionKey, text: string, files?: PromptFiles, opts?: { onError?: (e: unknown) => boolean | void }): Promise<boolean>;
   /** Launch a session (hub): pending flag under `pk`, toast on failure. Resolves to its reply, or undefined when it did not start. */
-  launch(pk: string, request: LaunchRequest): Promise<LaunchReply | undefined>;
+  launch(pk: string, request: LaunchRequest, opts?: { onError?: (e: unknown) => boolean | void }): Promise<LaunchReply | undefined>;
   /** Begin a user action that takes several calls (a launch that uploads files): its trace id and `ui.*` events. */
   trace(): Trace;
   /** Record something the app did that is not a command (`ui.developer_mode`, `ui.render_error`…). Never waits, never fails. */
   record(event: UiEvent): void;
-  stop(key: SessionKey): Promise<boolean>;
-  /** End the session's process (sessions.stop). */
-  stopSession(key: SessionKey): Promise<boolean>;
-  retry(key: SessionKey): Promise<boolean>;
+  /** Cancel the session's current turn; the agent keeps running (the `interrupt` command). */
+  interrupt(key: SessionKey): Promise<boolean>;
+  /** Shut the agent's process down and keep the session (`sessions.stop`). */
+  endSession(key: SessionKey): Promise<boolean>;
+  /** Start a new process for an ended session, with its earlier transcript (`sessions.continue`). */
+  continueSession(key: SessionKey): Promise<boolean>;
   askToFix(key: SessionKey, reason: string): Promise<boolean>;
   /** Record that the human looked at these sessions. Takes effect when the daemon confirms it. */
   markSeen(keys: SessionKey[]): void;
@@ -58,6 +66,10 @@ export function isGateWithdrawn(e: unknown): boolean {
   return r?.code === "gate_withdrawn" || r?.data?.error === "gate_withdrawn";
 }
 
+/** Pending-flag keys of the session actions (the buttons that start them show their state). */
+export const interruptPendingKey = (key: SessionKey) => `cmd:${key}:interrupt`;
+export const endPendingKey = (key: SessionKey) => `end:${key}`;
+export const continuePendingKey = (key: SessionKey) => `continue:${key}`;
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
 
 /**
@@ -92,6 +104,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
       return r ?? (true as never);
     } catch (e) {
       setPending(pk, null);
+      if (o.onError?.(e) === true) return undefined;
       if (isGateWithdrawn(e)) toast({ tone: "info", title: "No longer needed", detail: "The request was withdrawn before your answer arrived; nothing was done." });
       else toast({ tone: "err", title: failTitle, detail: errorMessage(e) });
       return undefined;
@@ -109,7 +122,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
         const t = trace();
         t.sent(host, id, c);
         return api.command(host, id, c, t.id);
-      }, { keepSent: o.keepSent, host }),
+      }, { keepSent: o.keepSent, host, onError: o.onError }),
     );
   };
 
@@ -129,8 +142,8 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
       command(key, { command: "answer_gate", request_id: requestId, decision }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
     answerQuestion: (key, requestId, answer) =>
       command(key, { command: "answer_question", request_id: requestId, answer }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
-    sendPrompt(key, text, files) {
-      if (!files?.count) return command(key, { command: "prompt", text }, { failTitle: "Could not send your message" });
+    sendPrompt(key, text, files, opts) {
+      if (!files?.count) return command(key, { command: "prompt", text }, { failTitle: "Could not send your message", onError: opts?.onError });
       const { host, id } = splitKey(key);
       return ok(
         run(`cmd:${key}:prompt`, "Could not send your message", async () => {
@@ -139,34 +152,33 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
           const attachments = await t.upload(files, files.upload);
           await api.command(host, id, { command: "prompt", text, attachments }, t.id);
           return true;
-        }, { host }),
+        }, { host, onError: opts?.onError }),
       );
     },
-    launch: (pk, request) =>
+    launch: (pk, request, opts) =>
       run(pk, "Could not start the session", () => {
         const t = trace();
         t.launch(request.host ?? localHost(store.get()), request, request.first_prompt != null, 0);
         return api.launch(request, t.id);
-      }),
+      }, { onError: opts?.onError }),
     trace,
     record: diag.log,
-    stop: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
-    stopSession: (key) => {
+    interrupt: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
+    endSession: (key) => {
       const { host, id } = splitKey(key);
-      return ok(run(`stop:${key}`, "Could not stop the session", () => {
+      return ok(run(endPendingKey(key), "Could not end the session", () => {
         const t = trace();
         t.command(host, id, "stop");
         return api.stopSession(host, id, t.id);
       }, { host }));
     },
-    retry: (key) => {
+    continueSession: (key) => {
       const { host, id } = splitKey(key);
       return ok(
-        run(`retry:${key}`, "Could not continue the session", async () => {
+        run(continuePendingKey(key), "Could not continue the session", async () => {
           const t = trace();
           t.command(host, id, "continue");
           await api.continueSession(host, id, t.id);
-          toast({ tone: "ok", title: "Session continued", detail: "It picked up where it stopped." });
           return true;
         }, { host }),
       );

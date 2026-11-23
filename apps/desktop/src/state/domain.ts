@@ -1,5 +1,5 @@
 import { permissionKind } from "../lib/gatewords";
-import type { GitSummary, HostId, ModelInfo, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
+import type { GitSummary, HostId, ModelInfo, NotContinuable, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
 import { sessionKey } from "../bridge/wire";
 import { basename } from "../lib/format";
 import { phaseToStatus, type StatusKey } from "../ui/status";
@@ -26,6 +26,8 @@ export interface SessionView {
   stat: { files: number; added: number; removed: number } | null;
   unseen: boolean;
   gates: PendingGate[];
+  /** The daemon's verdict on continuing the session (see `continueState`). */
+  cont: ContinueState;
   /**
    * What this view shows is the last the app knew, not live: the app lost its link to the local
    * daemon, or the session's host is not connected / has not delivered its list over the current
@@ -33,6 +35,67 @@ export interface SessionView {
    */
   stale: boolean;
 }
+
+/**
+ * Whether the session can be continued, exactly as the daemon says (`continuable` and, when not,
+ * `not_continuable` on the snapshot): the app infers nothing from the phase or the agent.
+ * - `running`: the process is running; there is nothing to continue and no Continue to offer.
+ * - `ready`: a new process can be started now (Continue, or a prompt, which continues it first).
+ * - `blocked`: the session has ended and cannot be continued; `why` is the daemon's rule.
+ */
+export type ContinueState = { kind: "running" } | { kind: "ready" } | { kind: "blocked"; why: Exclude<NotContinuable, "not_ended"> };
+
+const RUNNING: ContinueState = { kind: "running" };
+const READY: ContinueState = { kind: "ready" };
+const BLOCKED: Record<Exclude<NotContinuable, "not_ended">, ContinueState> = {
+  loading: { kind: "blocked", why: "loading" },
+  agent_cannot_resume: { kind: "blocked", why: "agent_cannot_resume" },
+  no_conversation_id: { kind: "blocked", why: "no_conversation_id" },
+  nothing_saved: { kind: "blocked", why: "nothing_saved" },
+};
+
+/** The daemon's verdict on `snap` (stable objects, so views compare shallowly). */
+export function continueState(snap: Pick<SessionSnapshot, "continuable" | "not_continuable">): ContinueState {
+  if (snap.continuable) return READY;
+  const why = snap.not_continuable;
+  return why && why !== "not_ended" ? BLOCKED[why] ?? RUNNING : RUNNING;
+}
+
+/** Why a session that has ended cannot be continued, as one sentence. */
+export function notContinuableWords(why: NotContinuable): string {
+  switch (why) {
+    case "not_ended":
+      return "The session is still running.";
+    case "loading":
+      return "The session is still loading; wait for it to finish.";
+    case "agent_cannot_resume":
+      return "This agent cannot pick a conversation back up.";
+    case "no_conversation_id":
+      return "The agent has not said which conversation this was, so it cannot be picked up again.";
+    case "nothing_saved":
+      return "The agent has not saved this conversation yet (it saves it with the first message), so there is nothing to continue.";
+  }
+}
+
+/**
+ * Whether Interrupt does anything: the agent can be interrupted and a turn is starting or running
+ * (or waiting for a decision, which an interrupt declines). The one rule for the button.
+ */
+export function canInterrupt(s: Pick<SessionSnapshot, "capabilities" | "phase">): boolean {
+  return s.capabilities.interrupt && (s.phase.state === "starting" || s.phase.state === "working" || s.phase.state === "needs_you");
+}
+
+/**
+ * Whether Esc interrupts: a turn is running and the session is not waiting on the user. Esc must
+ * never deny a pending request by accident (interrupting a session that waits for a decision
+ * declines it), so only the button interrupts then.
+ */
+export function escapeInterrupts(s: Pick<SessionSnapshot, "capabilities" | "phase">): boolean {
+  return s.capabilities.interrupt && s.phase.state === "working";
+}
+
+/** The word for a session whose phase is more specific than its status ("Starting" while the agent's process comes up), else `undefined`: the status label stands. */
+export const phaseWord = (v: Pick<SessionView, "phase">): string | undefined => (v.phase === "starting" ? "Starting" : undefined);
 
 export const keyOf = (host: HostId, s: SessionSnapshot): SessionKey => sessionKey(host, s.id);
 
@@ -110,6 +173,7 @@ export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | und
     stat: diffStat(git),
     unseen,
     gates: s.pending_gates,
+    cont: continueState(s),
     stale,
   };
 }

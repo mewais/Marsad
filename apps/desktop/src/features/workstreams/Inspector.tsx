@@ -8,7 +8,7 @@ import { linkView, useActions, useApi, useAppState, useHost, useSessionView, use
 import { Button, ConnState, DriverBadge, HostChip, Icon, Select, makeDriver } from "../../ui";
 import { Gate } from "../gates/Gate";
 import { checklist, nodeName, nodeStatus, POLICY, taskWords } from "./model";
-import { PendingSpawn, SpawnSection } from "./Spawning";
+import { PendingSpawn, SpawnHistory, SpawnSection } from "./Spawning";
 
 function PolicyPick({ value, onChange, busy }: { value: EdgePolicy; onChange: (p: EdgePolicy) => void; busy: boolean }) {
   return (
@@ -113,6 +113,7 @@ export function NodeInspector({ view, nodeId, design }: { view: WorkstreamView; 
       </div>
       {node.spawned_by ? <div className="sec"><div className="eyebrow">Spawned</div><div className="small"><Icon name="sparkle" size="xs" className="c-accent" /> Started by <b>{nodeName(view, node.spawned_by)}</b>{node.role ? <> to {node.role.charAt(0).toLowerCase() + node.role.slice(1)}</> : null}</div></div> : null}
       <PendingSpawn view={view} node={nodeId} />
+      <SpawnHistory view={view} node={nodeId} />
       <div className="sec"><div className="eyebrow">Now</div><div className="small">{snap ? snap.turn?.prompt ?? snap.last_turn?.reply ?? st.word : node.launch?.first_prompt ? `Will start with: “${node.launch.first_prompt}”` : "Waits for a handoff once launched."}</div></div>
       <div className="sec"><div className="eyebrow">Connections</div>
         {conns.length ? <div className="hist">{conns.map((e) => <div key={`${e.from}>${e.to}`} className="h"><Icon name={POLICY[e.policy].icon} size="sm" className={`c-${e.policy === "ask" ? "needs" : e.policy === "always_allow" ? "done" : "failed"}`} /><span>{nodeName(view, e.from)} → {nodeName(view, e.to)}</span><span className="w">{POLICY[e.policy].word}</span></div>)}</div> : <span className="faint small">Not connected yet.</span>}
@@ -137,6 +138,7 @@ export function WorkstreamPanel({ view }: { view: WorkstreamView }) {
   return (
     <aside className="insp" aria-label="Workstream">
       <PendingSpawn view={view} />
+      <SpawnHistory view={view} />
       <SpawnSection view={view} />
       <div className="faint small">Select an agent or a connection.</div>
     </aside>

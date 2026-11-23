@@ -1,5 +1,7 @@
-import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, InputDropReason, InputId, RateLimitInfo, SessionEvent } from "../../bridge/wire";
+import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, GateRequest, InputDropReason, InputId, RateLimitInfo, SessionEvent } from "../../bridge/wire";
+import { endedSentence } from "../../lib/endWords";
 import { clockTime, compactNumber } from "../../lib/format";
+import { gateWhat } from "../../lib/gatewords";
 
 /** Why a message the user wrote did not reach the agent. */
 export type NotSentCause = InputDropReason | Exclude<CommandStatus["status"], "sent" | "queued"> | "write_failed";
@@ -56,7 +58,7 @@ const COMMAND_WORD: Partial<Record<Command["command"], string>> = {
   interrupt: "The interrupt",
   set_model: "The model change",
   set_mode: "The mode change",
-  shutdown: "The stop request",
+  shutdown: "The request to end the session",
 };
 
 /** The fold's working state: everything needed to continue from the last processed event. */
@@ -68,13 +70,15 @@ interface State {
   users: Map<InputId, number>;
   /** Other commands (answers, interrupt ...), by input id: what to call them if one is dropped. */
   commands: Map<InputId, string>;
+  /** The gates raised so far, by request id: what to call one that was taken down. */
+  gates: Map<string, GateRequest>;
   lastMsg: string | undefined;
   /** Events processed so far (a prefix of the events array). */
   count: number;
   dirty: boolean;
 }
 
-const blank = (): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), lastMsg: undefined, count: 0, dirty: false });
+const blank = (): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), lastMsg: undefined, count: 0, dirty: false });
 
 const push = (st: State, item: Item) => {
   st.items.push(item);
@@ -198,6 +202,17 @@ function apply(st: State, e: SessionEvent) {
       if (deliver(st, id, (cur) => (cur.state === "not_sent" ? cur : { state: "not_sent", cause: reason, detail }))) return;
       const what = id ? st.commands.get(id) : undefined;
       if (what) notice(st, key, `${what} was not sent: ${dropWords(reason)}${detail ? ` (${detail})` : ""}`, reason === "unencodable" || reason === "refused" ? "err" : "info");
+      return;
+    }
+    case "gate_requested":
+      st.gates.set(a.gate.request_id, a.gate);
+      return;
+    case "gate_resolved": {
+      // A reason means the request was taken down by its owner (or ended with the process): say why. Without one the CLI or
+      // its protocol resolved it, or it was answered, and there is nothing to add.
+      if (!a.reason) return;
+      const gate = st.gates.get(a.request_id);
+      notice(st, key, endedSentence(gate ? gateWhat(gate) : "a request", a.reason), "info");
       return;
     }
     case "notice":

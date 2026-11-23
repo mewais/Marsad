@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import type { SpawnPolicy, SpawnSettings, WorkstreamView } from "../../bridge/wire";
+import type { EndCode, SpawnOutcomeView, SpawnPolicy, SpawnSettings, WorkstreamView } from "../../bridge/wire";
 import { sessionKey } from "../../bridge/wire";
+import { clockTime } from "../../lib/format";
+import { endWords } from "../../lib/endWords";
 import { useActions, useApi, useAppState, useHosts, usePending, useSessionView } from "../../state";
 import { Icon } from "../../ui";
 import { Gate } from "../gates/Gate";
+import { nodeName } from "./model";
 
 /** Spawn policy words (the workstream's rule for agents starting workers). */
 export const SPAWN_POLICY: Record<SpawnPolicy, { word: string; desc: string; icon: "shield" | "check" | "ban"; cls: string }> = {
@@ -24,6 +27,35 @@ export function PendingSpawn({ view, node }: { view: WorkstreamView; node?: stri
   return (
     <div className="sec" data-testid="spawn-gate">
       <Gate view={sender} pg={{ gate: g.gate, raised_at_ms: g.raised_at_ms, cursor: 0 }} density="full" active />
+    </div>
+  );
+}
+
+const NOT_STARTED: ReadonlySet<EndCode> = new Set(["denied", "refused", "launch_failed", "gate_unavailable"]);
+
+/** One ended spawn request: who asked, for what name, when, and how it ended (Wasl's code in words, what it said, the supervisor's code). */
+function SpawnOutcome({ view, r }: { view: WorkstreamView; r: SpawnOutcomeView }) {
+  const started = r.end.code === "launched";
+  return (
+    <div className="h" data-testid="spawn-outcome" data-end={r.end.code}>
+      <Icon name={started ? "done" : NOT_STARTED.has(r.end.code) ? "ban" : "clock"} size="sm" className={started ? "c-done" : NOT_STARTED.has(r.end.code) ? "c-failed" : "faint"} />
+      <div>
+        <b>{nodeName(view, r.node)}</b> asked for “{r.name}”
+        <div className="d">{endWords(r.end.code)}{r.detail ? ` ${r.detail}` : ""}{r.end.cause ? <> <span className="mono" data-testid="spawn-cause">({r.end.cause})</span></> : null}</div>
+      </div>
+      <span className="w">{clockTime(r.ended_ms)}</span>
+    </div>
+  );
+}
+
+/** The workstream's ended spawn requests, newest first, under the one that waits (`node`: only that agent's). */
+export function SpawnHistory({ view, node }: { view: WorkstreamView; node?: string }) {
+  const list = (view.recent_spawns ?? []).filter((r) => !node || r.node === node);
+  if (!list.length) return null;
+  return (
+    <div className="sec" data-testid="spawn-history">
+      <div className="eyebrow">Recent spawn requests</div>
+      <div className="hist">{list.map((r) => <SpawnOutcome key={r.request_id} view={view} r={r} />)}</div>
     </div>
   );
 }

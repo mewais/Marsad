@@ -4,7 +4,8 @@ import { err } from "./runtime";
 /** Fixture-only: a small directory tree per host for the project picker. */
 const TREE: Record<string, string[]> = {
   "/home/dev": ["src/", "Documents/", "Downloads/", ".config/", ".ssh/", "notes.md"],
-  "/home/dev/src": ["ledgerline/*", "marsad/*", "docs-site/*", "tilemap-renderer/*", "scratch/"],
+  "/home/dev/src": ["ledgerline/*", "marsad/*", "docs-site/*", "tilemap-renderer/*", "scratch/", "project/"],
+  "/home/dev/src/project": [],
   "/home/dev/src/ledgerline": ["apps/", "packages/", "package.json", "pnpm-lock.yaml"],
   "/home/dev/src/marsad": ["apps/", "crates/", "Cargo.toml"],
   "/home/dev/src/docs-site": ["content/", "package.json"],

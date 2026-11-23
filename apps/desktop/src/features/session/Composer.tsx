@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Attachment, SessionSnapshot } from "../../bridge/wire";
+import type { SessionSnapshot } from "../../bridge/wire";
 import { splitKey } from "../../bridge/wire";
-import { useActions, useApi, usePending, useSessionReach, useSessionView } from "../../state";
-import { sumBytes } from "../../state/diaglog";
+import { errorMessage } from "../../bridge/api";
+import { continueState, notContinuableWords, useActions, useApi, usePending, useSessionReach, useSessionView } from "../../state";
 import { modelChoice } from "../../state/domain";
-import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
+import { Button, Icon, IconButton, Kbd, Select, useEscape } from "../../ui";
 import { formatBytes } from "../media/fetch";
-import { batchProblem, fromFile, fromPicked, handling, upload, type PendingFile } from "./attachments";
+import { batchProblem, fromFile, fromPicked, handling, promptFiles, type PendingFile } from "./attachments";
 import { clearDraft, peekDraft } from "./draft";
 import { usePromptRecall } from "./usePromptRecall";
 import { inShell } from "../../lib/shell";
@@ -68,45 +68,49 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
       : "Attach images or files — or paste / drop them here";
   const [active, setActive] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
-  const sending = usePending(`cmd:${sessionKey}:prompt`) === "pending";
+  const promptPending = usePending(`cmd:${sessionKey}:prompt`);
+  const slashPending = usePending(`cmd:${sessionKey}:run_slash`);
+  const sending = promptPending === "pending" || slashPending === "pending";
   const recall = usePromptRecall(sessionKey, text, setText, ta);
-  // The slash menu belongs to typing a command; a recalled prompt is not being typed.
-  const slash = text.startsWith("/") && !text.includes(" ") && !text.includes("\n") && !recall.browsing;
+  // An ended session takes a prompt when the daemon says it can be continued (the daemon starts it again and then delivers
+  // the prompt); when it cannot, the box says why and takes nothing.
+  const cont = continueState(snap);
+  const noSend = cont.kind === "blocked" ? notContinuableWords(cont.why) : null;
+  // Mode and model are set on a running agent.
+  const setupBlock = cont.kind === "running" ? null : "The session has ended; set this once it is continued.";
+  const [failure, setFailure] = useState<string | null>(null);
+  // The slash menu belongs to typing a command; a recalled prompt is not being typed. Esc closes it, and nothing else.
+  const [menuClosed, setMenuClosed] = useState(false);
+  const slash = text.startsWith("/") && !text.includes(" ") && !text.includes("\n") && !recall.browsing && !menuClosed;
+  const menuOpen = slash && snap.slash_commands.length > 0;
+  useEscape(menuOpen, () => setMenuClosed(true));
   const items = useMemo(() => (slash ? snap.slash_commands.filter((c) => c.name.toLowerCase().startsWith(text.slice(1).toLowerCase())) : []), [slash, text, snap.slash_commands]);
-  const live = snap.phase.state !== "exited" && snap.phase.state !== "lost";
 
+  // What is typed stays until the daemon has taken it: nothing is shown as sent that was not.
   const submit = async () => {
     const t = text.trim();
-    if ((!t && !files.length) || sending || problem || blocked) return;
+    if ((!t && !files.length) || sending || problem || blocked || noSend) return;
+    setFailure(null);
+    const onError = (e: unknown) => (setFailure(errorMessage(e)), true);
+    let ok: boolean;
     if (files.length) {
       const { host, id } = splitKey(sessionKey);
       const sent = files;
-      const ok = await actions.sendPrompt(sessionKey, t, {
-        count: sent.length,
-        bytes: sumBytes(sent),
-        upload: async () => {
-          const attachments: Attachment[] = [];
-          for (const f of sent) attachments.push(await upload(api, host, id, f));
-          return attachments;
-        },
-      });
-      if (ok) {
-        sent.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb));
-        setFiles([]);
-        recall.reset();
-        setText("");
-      }
-      return;
+      ok = await actions.sendPrompt(sessionKey, t, promptFiles(api, host, id, sent), { onError });
+      if (ok) sent.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb));
+    } else {
+      const m = /^\/(\S+)\s*(.*)$/s.exec(t);
+      const cmd = m && snap.slash_commands.some((c) => c.name === m[1]) ? m : null;
+      ok = cmd ? await actions.command(sessionKey, { command: "run_slash", name: cmd[1], args: cmd[2] }, { failTitle: "Could not run the command", onError }) : await actions.sendPrompt(sessionKey, t, undefined, { onError });
     }
-    const m = /^\/(\S+)\s*(.*)$/s.exec(t);
-    const cmd = m && snap.slash_commands.some((c) => c.name === m[1]) ? m : null;
+    if (!ok) return;
+    if (files.length) setFiles([]);
     recall.reset();
     setText("");
-    const ok = cmd ? await actions.command(sessionKey, { command: "run_slash", name: cmd[1], args: cmd[2] }, { failTitle: "Could not run the command" }) : await actions.sendPrompt(sessionKey, t);
-    if (!ok) setText(t);
   };
   const pick = (name: string) => {
     recall.reset();
+    setMenuClosed(false);
     setText(`/${name} `);
     ta.current?.focus();
   };
@@ -128,7 +132,7 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
           add(Array.from(e.dataTransfer.files).map(fromFile));
         }}
       >
-        {slash && snap.slash_commands.length ? (
+        {menuOpen ? (
           <div className="slash" role="listbox" aria-label="Slash commands">
             {items.length === 0 ? <div className="faint pad8">No command starts with “{text}”</div> : null}
             {items.map((c, i) => (
@@ -143,6 +147,8 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
         <PendingList files={files} input={input} onRemove={remove} />
         {problem ? <div className="comp-msg" role="alert">{problem}</div> : null}
         {blocked ? <div className="comp-msg" role="status" data-testid="composer-blocked">Cannot send now. {blocked}</div> : null}
+        {noSend ? <div className="comp-msg" role="status" data-testid="composer-ended">Cannot send: {noSend}</div> : null}
+        {failure ? <div className="comp-msg" role="alert" data-testid="composer-failure">Not sent. {failure} Your message is still here.</div> : null}
         <input ref={fileInput} type="file" multiple hidden data-testid="attach-input" onChange={(e) => { add(Array.from(e.target.files ?? []).map(fromFile)); e.target.value = ""; }} />
         <textarea
           ref={ta}
@@ -153,34 +159,35 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
             add(pasted.map(fromFile));
           }}
           aria-label="Message"
-          placeholder={live ? "Message the agent" : "This session has ended; sending continues it"}
+          placeholder={cont.kind === "running" ? "Message the agent" : noSend ?? "This session has ended; sending a message continues it"}
           value={text}
-          onChange={(e) => { recall.reset(); setText(e.target.value); setActive(0); }}
+          disabled={!!noSend}
+          readOnly={sending}
+          onChange={(e) => { recall.reset(); setText(e.target.value); setActive(0); setMenuClosed(false); setFailure(null); }}
           onKeyDown={(e) => {
-            if (slash && items.length) {
+            if (menuOpen && items.length) {
               if (e.key === "ArrowDown") { e.preventDefault(); return setActive((a) => Math.min(items.length - 1, a + 1)); }
               if (e.key === "ArrowUp") { e.preventDefault(); return setActive((a) => Math.max(0, a - 1)); }
               if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && text.slice(1) !== items[active]?.name)) { e.preventDefault(); return pick(items[active].name); }
             }
             if (recall.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); }
-            if (e.key === "Escape") (e.target as HTMLElement).blur();
           }}
         />
         <div className="comp-bar">
-          <IconButton icon="clip" label={attachHint} onClick={() => void attach()} disabled={!canAttach || !!blocked} />
-          <IconButton icon="slash" label="Slash commands" onClick={() => { recall.reset(); setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands} />
+          <IconButton icon="clip" label={attachHint} onClick={() => void attach()} disabled={!canAttach || !!blocked || !!noSend} />
+          <IconButton icon="slash" label="Slash commands" onClick={() => { recall.reset(); setMenuClosed(false); setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands || !!noSend} />
           {snap.available_modes.length ? (
-            <Select compact up label="Mode" blocked={blocked} leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
+            <Select compact up label="Mode" blocked={blocked ?? setupBlock} leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
               onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
           ) : null}
           {snap.available_models.length ? (
-            <Select compact up label="Model" blocked={blocked} leading={<Icon name="sparkle" size="xs" />} value={modelChoice(snap).value} options={modelChoice(snap).options}
+            <Select compact up label="Model" blocked={blocked ?? setupBlock} leading={<Icon name="sparkle" size="xs" />} value={modelChoice(snap).value} options={modelChoice(snap).options}
               onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
           ) : null}
           <span className="sp" />
           {recall.paging ? <span className="faint fs115" role="status">Loading earlier prompts…</span> : <span className="faint fs115"><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line · <Kbd>↑</Kbd> earlier prompts</span>}
-          <Button variant="primary" size="sm" icon="send" pending={sending} blocked={blocked} disabled={(!text.trim() && !files.length) || !!problem} onClick={() => void submit()}>Send</Button>
+          <Button variant="primary" size="sm" icon="send" pending={sending} blocked={blocked} disabled={(!text.trim() && !files.length) || !!problem || !!noSend} onClick={() => void submit()}>Send</Button>
         </div>
       </div>
     </div>

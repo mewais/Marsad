@@ -3,7 +3,7 @@ import { actionStore, searchActions } from "../commands/registry";
 import { useStore } from "../lib/store";
 import { sessionPath, useNavigate } from "../router";
 import { selectView, useApp, type SessionView } from "../state";
-import { Dialog, Icon, Kbd } from "../ui";
+import { Dialog, Icon, Kbd, STATUS } from "../ui";
 
 interface Item {
   id: string;
@@ -41,7 +41,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         if (`${v.name} ${v.project} ${v.branch} ${hosts[v.host]?.entry.name ?? ""}`.toLowerCase().includes(n)) found.push(v);
       }
       for (const v of found.slice(0, 8)) {
-        out.push({ id: `s:${v.key}`, section: "Sessions", title: v.name, hint: `${hosts[v.host]?.entry.name ?? v.host} · ${v.project}`, icon: "inbox", run: () => nav(sessionPath(v.host, v.id)) });
+        out.push({ id: `s:${v.key}`, section: "Sessions", title: v.name, hint: `${hosts[v.host]?.entry.name ?? v.host} · ${v.project} · ${STATUS[v.status].label}`, icon: "inbox", run: () => nav(sessionPath(v.host, v.id)) });
       }
     }
     return out;

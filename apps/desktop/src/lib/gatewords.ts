@@ -40,3 +40,19 @@ export function permissionShort(g: Perm, max = 28): string {
   const t = l.text.length > max ? `${l.text.slice(0, max - 1)}…` : l.text;
   return `${l.prefix}${t}`;
 }
+
+/** What a gate asked for, as a phrase to put a sentence about its ending on ("the request to start scout"). */
+export function gateWhat(g: GateRequest): string {
+  switch (g.gate_type) {
+    case "spawn":
+      return `the request to start ${g.name}`;
+    case "handoff":
+      return `the handoff from ${g.from} to ${g.to}`;
+    case "question":
+      return "the agent’s question";
+    case "plan":
+      return "the plan waiting for approval";
+    default:
+      return "the agent’s request";
+  }
+}

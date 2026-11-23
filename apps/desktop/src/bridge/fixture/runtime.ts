@@ -1,4 +1,4 @@
-import type { Command, CommandReply, GateRequest, HostId, InputDropReason, InputId, PhaseCause, RpcError, SessionEvent, SessionSnapshot, TrailItem } from "../wire";
+import type { Command, CommandReply, GateReason, GateRequest, HostId, InputDropReason, InputId, NotContinuable, PhaseCause, RpcError, SessionEvent, SessionSnapshot, TrailItem } from "../wire";
 import { conversationFacts } from "./catalog";
 import { projectEvent } from "./diagnostics";
 import type { SessionEventKind } from "./transcripts";
@@ -21,7 +21,12 @@ export interface Entry {
   queue?: { input: InputId; text: string; held: boolean }[];
   /** Counts the turns started: a scripted step of a turn that was interrupted or ended does nothing. */
   turn?: number;
+  /** The next start of a process for this session fails with this reason (a test sets it; it clears itself). */
+  continueFails?: string;
 }
+
+/** A gate raised by Wasl (spawn, handoff): taken down with a reason when its request goes away. The CLI's own gates are not. */
+const isExternal = (g: GateRequest) => g.gate_type === "spawn" || g.gate_type === "handoff";
 
 /** The trace of the request a command arrived with, when it had one. */
 const traced = (trace?: string) => (trace ? { trace } : {});
@@ -34,7 +39,18 @@ export interface SimHooks {
   after(ms: number, fn: () => void): void;
   /** A snapshot changed: tell fleet subscribers. */
   publish(e: Entry): void;
+  /** An external gate left its session without an answer (the hub's views of the request follow). */
+  gateEnded?(e: Entry, gate: GateRequest, reason: GateReason): void;
 }
+
+/** The runtime's words for why a continue was refused (`begin_continue`), as the error a `sessions.continue` carries. */
+const CONTINUE_REFUSED: Record<NotContinuable, { code: string; error: string; message: string }> = {
+  not_ended: { code: "invalid_state", error: "invalid_state", message: "the session is still running" },
+  loading: { code: "invalid_state", error: "invalid_state", message: "the session is still loading" },
+  agent_cannot_resume: { code: "unsupported", error: "unsupported", message: "this agent cannot resume sessions" },
+  no_conversation_id: { code: "invalid_state", error: "invalid_state", message: "the CLI never reported a native session id; nothing to resume" },
+  nothing_saved: { code: "invalid_state", error: "invalid_state", message: "the agent has not saved this conversation yet (it saves it with its first message), so there is nothing to resume" },
+};
 
 export class SessionSim {
   constructor(private h: SimHooks) {}
@@ -45,11 +61,15 @@ export class SessionSim {
     if (answers && !e.snap.pending_gates.some((x) => x.gate.request_id === c.request_id) && e.withdrawn?.has(c.request_id)) {
       throw err("gate_withdrawn", `the gate ${c.request_id} is no longer needed (withdrawn)`, { error: "gate_withdrawn", request_id: c.request_id });
     }
-    if (!["starting", "idle", "working", "needs_you"].includes(e.snap.phase.state)) {
-      const reason = `the session is ${e.snap.phase.state}`;
-      throw err("not_running", `the session is not running: ${reason}`, { error: "not_running", reason });
-    }
     if (c.command === "shutdown") throw err("rejected", "rejected: use sessions.stop to end a session", { error: "rejected", reason: "use sessions.stop to end a session" });
+    if (!this.running(e)) {
+      // Like the daemon: a prompt (or slash command) continues the session first and is then delivered, in that order; any other command to an ended session is refused.
+      if (c.command !== "prompt" && c.command !== "run_slash") {
+        const reason = `the session is ${e.snap.phase.state}`;
+        throw err("not_running", `the session is not running: ${reason}`, { error: "not_running", reason });
+      }
+      this.continueForCommand(e);
+    }
     switch (c.command) {
       case "prompt":
       case "run_slash": {
@@ -91,7 +111,8 @@ export class SessionSim {
         this.journal(e, c, trace);
         this.dropQueued(e, "interrupted");
         e.turn = (e.turn ?? 0) + 1;
-        e.snap = { ...e.snap, pending_gates: [], turn: null };
+        this.declineGates(e, { code: "turn_interrupted" });
+        e.snap = { ...e.snap, turn: null };
         this.setPhase(e, { state: "idle" });
         return { outcome: "sent" };
       case "set_model":
@@ -105,6 +126,74 @@ export class SessionSim {
         this.patch(e, { mode: c.mode });
         return { outcome: "sent" };
     }
+  }
+
+  /** A process is running (or starting) for the session. */
+  private running(e: Entry): boolean {
+    return ["starting", "idle", "working", "needs_you"].includes(e.snap.phase.state);
+  }
+
+  /**
+   * The gates still waiting leave without an answer: the CLI's own are declined by the protocol (no reason), the external ones
+   * are taken down with `reason`; the hub is told about the external ones.
+   */
+  private declineGates(e: Entry, reason: GateReason) {
+    const gates = e.snap.pending_gates.map((g) => g.gate);
+    for (const g of gates) this.emit(e, { kind: "agent", event: { type: "gate_resolved", request_id: g.request_id, ...(isExternal(g) ? { reason } : {}) } });
+    e.snap = { ...e.snap, pending_gates: [] };
+    for (const g of gates.filter(isExternal)) {
+      (e.withdrawn ??= new Set()).add(g.request_id);
+      this.h.gateEnded?.(e, g, reason);
+    }
+  }
+
+  /**
+   * The daemon's refusal to start another process: `not_continuable` (the rule), or `continueFails` (the spawn did not work).
+   * Null when a process can be started now.
+   */
+  private refusal(e: Entry): { why: NotContinuable | null; reason: string } | null {
+    const why = conversationFacts(e.snap).not_continuable;
+    if (why) return { why, reason: CONTINUE_REFUSED[why].message };
+    if (e.continueFails) {
+      const reason = e.continueFails;
+      e.continueFails = undefined;
+      return { why: null, reason };
+    }
+    return null;
+  }
+
+  /** A prompt reached an ended session: start the next process, or refuse as the daemon does (nothing is journaled). */
+  private continueForCommand(e: Entry) {
+    const no = this.refusal(e);
+    if (no?.why === "not_ended") {
+      const reason = `the session is ${e.snap.phase.state}`;
+      throw err("not_running", `the session is not running: ${reason}`, { error: "not_running", reason });
+    }
+    if (no) throw err("continue_failed", `the session had ended and could not be continued, so nothing was sent: ${no.reason}`, { error: "continue_failed", reason: no.reason, ...(no.why ? { blocked: no.why } : {}) });
+    this.startProcess(e);
+  }
+
+  /** `sessions.continue`: the next process of an ended session, or the runtime's error saying why not. */
+  continueSession(e: Entry) {
+    const no = this.refusal(e);
+    if (no?.why) {
+      const r = CONTINUE_REFUSED[no.why];
+      throw err(r.code, r.code === "unsupported" ? `not supported: ${r.message}` : `not possible in the session's current state: ${r.message}`, { error: r.error, message: r.message });
+    }
+    if (no) throw err("spawn_failed", `could not start the session: ${no.reason}`, { error: "spawn", message: no.reason });
+    this.startProcess(e);
+  }
+
+  /** A new process generation: the session is `starting` until its handshake is done (`ready`). */
+  private startProcess(e: Entry) {
+    const generation = e.snap.generation + 1;
+    const pid = (e.snap.pid ?? 1000) + 1;
+    this.emit(e, { kind: "spawned", generation, pid, argv: [e.snap.command ?? "agent"] });
+    this.emit(e, { kind: "started", generation, resume: "resume", resume_id: e.snap.native_session_id });
+    this.patch(e, { generation, pid, exit: null });
+    this.setPhase(e, { state: "starting" });
+    const turn = (e.turn = (e.turn ?? 0) + 1);
+    this.h.after(300, () => e.turn === turn && this.ready(e));
   }
 
   /** The id the next journaled input gets: the journal seq of its `input` event, like the daemon's. */
@@ -150,6 +239,8 @@ export class SessionSim {
   end(e: Entry) {
     this.dropQueued(e, "shutdown");
     e.turn = (e.turn ?? 0) + 1;
+    this.declineGates(e, { code: "session_stopped" });
+    e.snap = { ...e.snap, turn: null, exit: { code: 0, at_ms: this.h.now(), requested: true } };
     this.setPhase(e, { state: "exited", code: 0 }, { kind: "exited", requested: true, handshake_timeout: false });
   }
 
@@ -193,12 +284,14 @@ export class SessionSim {
     this.h.after(1200, () => e.turn === turn && this.finishTurn(e, reply));
   }
 
-  /** The request behind an external gate went away: the gate leaves without an answer. */
-  withdrawGate(e: Entry, requestId: string) {
+  /** The request behind an external gate went away: the gate leaves without an answer, with `reason` (its owner's, legacy `withdrawn` when it said none). */
+  withdrawGate(e: Entry, requestId: string, reason: GateReason = { code: "withdrawn" }) {
     (e.withdrawn ??= new Set()).add(requestId);
+    const gone = e.snap.pending_gates.find((g) => g.gate.request_id === requestId)?.gate;
     const gates = e.snap.pending_gates.filter((g) => g.gate.request_id !== requestId);
-    this.emit(e, { kind: "agent", event: { type: "gate_resolved", request_id: requestId, reason: "withdrawn" } });
+    this.emit(e, { kind: "agent", event: { type: "gate_resolved", request_id: requestId, reason } });
     e.snap = { ...e.snap, pending_gates: gates };
+    if (gone) this.h.gateEnded?.(e, gone, reason);
     if (gates.length) return this.h.publish(e);
     this.setPhase(e, { state: e.snap.turn ? "working" : "idle" });
   }

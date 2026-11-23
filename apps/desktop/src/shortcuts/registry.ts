@@ -36,7 +36,8 @@ export function chordOf(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "
   return parts.join("+");
 }
 
-const isTyping = (t: EventTarget | null) => {
+/** The key goes to a text field (an input, a textarea, a select, editable content). */
+export const isTyping = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;
   if (!el || !el.tagName) return false;
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;

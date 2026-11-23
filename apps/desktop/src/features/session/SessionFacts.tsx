@@ -1,10 +1,30 @@
-import type { SessionSnapshot } from "../../bridge/wire";
+import type { ResumeCommand, SessionSnapshot } from "../../bridge/wire";
+import { commandLine } from "../../lib/commandLine";
 import { clockTime, compactNumber, money } from "../../lib/format";
 import { useDriver } from "../../state";
-import { Icon } from "../../ui";
+import { CopyButton, Icon } from "../../ui";
 import { usageSummary } from "./usage";
 
 const subagentState = (s: SessionSnapshot["subagents"][number]) => (s.running ? "Running" : s.ok === false ? "Failed" : "Finished");
+
+/**
+ * How to open this conversation in the user's own program: the command the daemon gave (its `argv`, quoted for reading and
+ * pasting) and the folder to run it from, each with a copy button. Never built here; shown only when the daemon has it.
+ */
+function OwnTerminal({ cmd }: { cmd: ResumeCommand }) {
+  const line = commandLine(cmd.argv);
+  return (
+    <div data-testid="side-own-terminal">
+      <h4>Open in your own terminal</h4>
+      <div className="own">
+        <div className="own-row"><code className="mono" data-testid="own-command">{line}</code><CopyButton text={line} label="Copy the command" /></div>
+        <div className="faint small">Run it in this folder</div>
+        <div className="own-row"><code className="mono" data-testid="own-folder">{cmd.cwd}</code><CopyButton text={cmd.cwd} label="Copy the folder" /></div>
+        <p className="faint small">This opens the same conversation in the agent’s own program. The agent’s own session list may not show conversations started by other tools.</p>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The session sidebar's facts: model, mode, cost, context window, tokens and cache, cost per
@@ -71,6 +91,7 @@ export function SessionFacts({ snap }: { snap: SessionSnapshot }) {
           </div>
         </div>
       ) : null}
+      {snap.resume_command ? <OwnTerminal cmd={snap.resume_command} /> : null}
     </>
   );
 }

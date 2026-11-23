@@ -22,6 +22,7 @@ export function HomeSummary({ counts }: { counts: Counts }) {
       <span className="c-done"><Icon name="done" size="sm" /> <b>{counts.done}</b> finished{since}</span>
       <span className="c-working"><Icon name="working" size="sm" spin /> <b>{counts.working}</b> working</span>
       <span className="muted"><Icon name="idle" size="sm" /> {counts.idle} idle</span>
+      <span className="muted"><Icon name="stop" size="sm" /> {counts.ended} ended</span>
       {counts.stale ? <span className="lk" data-testid="summary-stale" title="Their hosts are not reporting, so they are not counted above"><Icon name="clock" size="sm" /> <b>{counts.stale}</b> last known</span> : null}
     </>
   );

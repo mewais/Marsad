@@ -6,7 +6,7 @@ import { useNavigate } from "../../../router";
 import { useActions, useApi, useDriver, useHost, useReach } from "../../../state";
 import { Button, Card, Icon, Select, Skeleton } from "../../../ui";
 import { KIND, provenance } from "../../config/provenance";
-import { modelChoice } from "../../../state/domain";
+import { continueState, modelChoice } from "../../../state/domain";
 
 /** Config tab: model and mode as the CLI reports them, and the effective config of this session with provenance. */
 export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: SessionSnapshot }) {
@@ -33,7 +33,7 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
   useEffect(() => setMode(snap.mode ?? ""), [snap.mode]);
   const name = drv?.displayName ?? snap.driver;
   const reach = useReach(host);
-  const live = ["idle", "working", "needs_you", "starting"].includes(snap.phase.state);
+  const live = continueState(snap).kind === "running";
   const apply = () => {
     if (model && model !== current) void actions.command(sessionKey, { command: "set_model", model }, { failTitle: "Could not change the model" });
     if (mode && mode !== snap.mode) void actions.command(sessionKey, { command: "set_mode", mode }, { failTitle: "Could not change the mode" });

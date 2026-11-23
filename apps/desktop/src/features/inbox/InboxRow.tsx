@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { agoShort, money } from "../../lib/format";
 import { Button, DriverBadge, HostChip, ConnState, Icon, StatusPill } from "../../ui";
-import { linkView, useDriver, useHost, useRenderProbe, useSessionView } from "../../state";
+import { linkView, phaseWord, useDriver, useHost, useRenderProbe, useSessionView } from "../../state";
 import { Gate } from "../gates/Gate";
 import { DoneActions, FailedActions, NewDot, WorkstreamTag } from "../common/SessionBits";
 import type { SessionKey } from "../../bridge/wire";
@@ -26,7 +26,7 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
   return (
     <div className={`ibx-item${selected ? " sel" : ""}`} role="listitem" data-session={v.key} data-status={v.status} data-stale={v.stale ? "" : undefined} aria-current={selected ? "true" : undefined}>
       <div className="ibx-row" onClick={activate} onDoubleClick={() => onOpen(v.key)}>
-        <div><StatusPill status={v.status} stale={v.stale} />{v.stale ? <div className="lk">last known</div> : null}</div>
+        <div><StatusPill status={v.status} label={phaseWord(v)} stale={v.stale} />{v.stale ? <div className="lk">last known</div> : null}</div>
         <div className="sn">
           <div className="t">
             {v.unseen ? <NewDot /> : null}
@@ -63,7 +63,7 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
           ) : null}
         </>
       ) : null}
-      {v.status === "done" ? <div className="donebox"><DoneActions view={v} keys={selected} /></div> : null}
+      {v.status === "done" || v.status === "ended" ? <div className="donebox"><DoneActions view={v} keys={selected} seen={v.status === "done"} /></div> : null}
       {v.status === "failed" ? <div className="donebox"><FailedActions view={v} /></div> : null}
     </div>
   );

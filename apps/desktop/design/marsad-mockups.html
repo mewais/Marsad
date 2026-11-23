@@ -148,8 +148,10 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 .st.done{color:var(--done);background:var(--done-bg);border-color:var(--done-line)}
 .st.working{color:var(--working);background:var(--working-bg);border-color:var(--working-line)}
 .st.idle{color:var(--idle);background:var(--idle-bg);border-color:transparent}
+/* Ended: the agent's process is gone, the session is kept. Outlined, so it never reads as idle. */
+.st.ended{color:var(--fg-3);background:transparent;border-color:var(--line-2)}
 .st.plain{background:transparent;border-color:transparent;padding:0;height:auto}
-.c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-accent{color:var(--accent)}
+.c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-ended{color:var(--fg-3)} .c-accent{color:var(--accent)}
 
 .drv{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:var(--fg-2)}
 .drv b{display:inline-grid;place-items:center;width:20px;height:18px;border-radius:4px;font:600 9.5px/1 var(--f-mono);border:1px solid currentColor;letter-spacing:-.02em}
@@ -177,6 +179,8 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .field{display:flex;flex-direction:column;gap:6px}
 .field>label{font-size:12px;font-weight:600;color:var(--fg)}
 .field .hint{font-size:11.5px;color:var(--fg-3)}
+.field .err{font-size:11.5px;color:var(--failed)}
+.field.bad .input{border-color:var(--failed-line)}
 .selbox{display:flex;align-items:center;justify-content:space-between;gap:8px;height:30px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface);font-size:12.5px;color:var(--fg)}
 .selbox .i{color:var(--fg-3)}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r3)}
@@ -618,6 +622,13 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .st.draft{color:var(--accent);background:var(--accent-bg);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
 
 /* ---------- New session: resumable list ---------- */
+.recent.owned{align-items:flex-start}
+.recent.owned .tx{white-space:normal;line-height:1.45}
+.sd-ended{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2)}
+.own{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.own p{margin:0;line-height:1.45}
+.own-row{display:flex;align-items:flex-start;gap:6px}
+.own-row code{flex:1;min-width:0;padding:4px 6px;border-radius:6px;background:var(--sunken);border:1px solid var(--line);font:11.5px var(--f-mono);overflow-wrap:anywhere}
 .recent{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface-2);font-size:12px}
 .recent .tx{flex:1;min-width:0}
 .recent .tx div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -768,6 +779,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
     <symbol id="i-dots" viewBox="0 0 24 24"><path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
+    <symbol id="i-ended" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4"/></symbol>
     <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
@@ -850,7 +862,7 @@ const HOSTS={
   win:{name:'win-build',os:'Windows 11 Pro',kind:'windows',icon:'i-monitor',conn:['warn','Reconnecting in 4s'],where:'SSH'},
 };
 const WS={inv:'Invoice export v2',ci:'Flaky CI triage'};
-const STL={needs:'Needs you',failed:'Failed',done:'Finished',working:'Working',idle:'Idle'};
+const STL={needs:'Needs you',failed:'Failed',done:'Finished',working:'Working',idle:'Idle',ended:'Ended'};
 const S=[
  {id:'s7',name:'migrate-auth-middleware',st:'needs',drv:'cc',host:'x1',proj:'ledgerline',br:'refactor/auth-mw',ws:null,ago:'1m',cost:2.41,
   line:'Asks: how should legacy session cookies be handled during rollout?',gate:'q'},
@@ -879,6 +891,7 @@ const S=[
  {id:'s9',name:'docs-search-index',st:'idle',drv:'oc',host:'x1',proj:'docs-site',br:'main',ws:null,ago:'2h',cost:0.44,line:'Finished yesterday 18:10 · seen'},
  {id:'s12',name:'sqlite-wal-tuning',st:'idle',drv:'cx',host:'hz',proj:'ledgerline',br:'perf/wal',ws:null,ago:'5h',cost:0.62,line:'Paused by you at 10:32'},
  {id:'s14',name:'release-notes-1-4',st:'idle',drv:'cc',host:'x1',proj:'marsad',br:'release/1.4',ws:null,ago:'1d',cost:0.33,line:'Draft ready in CHANGELOG.md · seen'},
+ {id:'s16',name:'release-notes-1-3',st:'ended',drv:'cc',host:'x1',proj:'marsad',br:'release/1.3',ws:null,ago:'3d',cost:0.29,line:'Ended by you · its transcript is kept'},
 ];
 const by=id=>S.find(s=>s.id===id);
 /* Permission and question choices are the agent's own, in its own words. Only handoffs (agent to agent, via Wasl) use Marsad's fixed set. */
@@ -907,10 +920,10 @@ const kbd=k=>`<kbd>${k}</kbd>`;
 /* ================= REVIEW BAR STATE ================= */
 const SCREENS=[
  {id:'home',n:1,label:'Home',short:'Home',vars:[['a','A · Inbox'],['c','C · Attention board']]},
- {id:'session',n:2,label:'Session',short:'Session'},
+ {id:'session',n:2,label:'Session',short:'Session',vars:[['run','Running'],['ended','Ended'],['blocked','Ended · cannot continue'],['fail','Ended · prompt refused']]},
  {id:'workstreams',n:3,label:'Workstreams',short:'Streams',vars:[['list','List'],['new','New workstream']]},
- {id:'graph',n:4,label:'Workstream',short:'Graph',vars:[['run','Running'],['design','Design']]},
- {id:'new',n:5,label:'New session',short:'New',vars:[['s','New session'],['w','Add agent']]},
+ {id:'graph',n:4,label:'Workstream',short:'Graph',vars:[['run','Running'],['spawn','Spawning'],['design','Design']]},
+ {id:'new',n:5,label:'New session',short:'New',vars:[['s','New session'],['w','Add agent'],['c','Continue · Marsad session'],['f','Folder refused']]},
  {id:'config',n:6,label:'Agent config',short:'Config'},
  {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host']]},
  {id:'gates',n:8,label:'Gates + alerts',short:'Gates',vars:[['a','Gate review'],['b','Notifications']]},
@@ -919,12 +932,18 @@ const SCREENS=[
 const CAPTIONS={
  'home-a':'Every session in one list, including the ones inside workstreams (tagged). Sorted by what needs you. Choices on each row are the agent\'s own.',
  'home-c':'Only sessions with something for you get a card. Working and idle ones fold into the strip at the bottom. Try "No failures" to see an empty column collapse.',
- 'session':'Full transcript with gates inline. The permission and question choices are exactly what Claude Code offered. Click "/" in the composer for the slash menu.',
+ 'session-run':'Full transcript with gates inline. The permission and question choices are exactly what Claude Code offered. Click "/" in the composer for the slash menu. Interrupt cancels the current turn and the agent keeps running; End session shuts the agent down and keeps the session. Esc, innermost first: an open menu, dialog, preview or editor closes; then, with a turn running (not one waiting for your decision), Esc interrupts it; with none, Esc leaves the text field, and once nothing has the focus it goes back to the Inbox.',
+ 'session-ended':'An ended session offers Continue (the daemon\'s verdict: it can start the agent again with the earlier transcript) and Delete. Sending a message continues it first, then delivers the message; the box says so. The sidebar gives the command that opens this conversation in the agent\'s own program.',
+ 'session-blocked':'When the daemon says an ended session cannot be continued, Continue is disabled and the reason is said in words; the message box says the same and takes nothing. No command is offered when the agent has no saved conversation.',
+ 'session-fail':'A message to an ended session that the daemon could not continue is not sent: the box keeps the text and shows the daemon\'s reason.',
  'workstreams-list':'All workstreams with hosts, session count and status in words. Start a new one from here or from the caret next to New session.',
  'workstreams-new':'Step 1 of 2: name it and choose a starting point. Next comes the design graph.',
  'graph-run':'Hosts are lanes, connections are routed around agents. Click a connection to set its policy; the amber pill is a handoff waiting for you.',
  'graph-design':'Step 2: place agents in host lanes, drag from a dot to connect them, set each connection\'s policy, then launch or save as a draft.',
  'new-s':'Start or continue a session. The list shows every session this CLI has for the folder on that host, including ones started in a terminal.',
+ 'new-c':'A conversation that belongs to one of your Marsad sessions is that session\'s: Continue picks the session up with its earlier transcript (a message typed here is sent to it), never a second session on the same conversation. If the session is running, the button opens it instead.',
+ 'new-f':'The host refuses a project folder it cannot use and says so next to the field, naming the path as typed. The dialog stays open with everything typed.',
+ 'graph-spawn':'Why a spawn request went away: under the one that waits, the ended requests, newest first: who asked, for what name, when, and the outcome in words, with what was said and the supervisor\'s code.',
  'new-w':'The same launch form, opened from "Add agent" in a workstream design. Nothing starts until you launch the workstream.',
  'config':'Marsad shows what each agent CLI already has, read-only, then layers your overrides on top. Only the Wasl connector is added by Marsad itself.',
  'hosts-a':'Every machine with its connection state in words, installed CLIs and versions, and what runs there.',
@@ -941,7 +960,7 @@ const CAPTIONS={
  'diag-h':'Developer mode: a host\'s connection log by attempt, with the stage, exit code and the host\'s scrubbed words when a connect failed. For a connected host its own log follows.',
  'diag-l':'The local host has no link to log: the app reaches it through the local service, so this shows that service\'s own log and says so.',
 };
-const state={screen:'home',vars:{home:'a',workstreams:'list',graph:'run',new:'s',hosts:'a',gates:'a',diag:'s'},tab:'activity',sel:'s7',quiet:false,strip:false,slash:false,edge:'e-win',gtab:'perm',gdrv:'cc',cdrv:'cc',qopt:0,ibxq:{s7:0},wstart:'sessions'};
+const state={screen:'home',vars:{home:'a',session:'run',workstreams:'list',graph:'run',new:'s',hosts:'a',gates:'a',diag:'s'},tab:'activity',sel:'s7',quiet:false,strip:false,slash:false,edge:'e-win',gtab:'perm',gdrv:'cc',cdrv:'cc',qopt:0,ibxq:{s7:0},wstart:'sessions'};
 
 function readHash(){
   const h=(location.hash||'').slice(1); if(!h) return;
@@ -1004,6 +1023,7 @@ function homeHeader(sub){
     <span class="c-done">${I('i-done','sm')} <b>3</b> finished since you looked at 14:20</span>
     <span class="c-working">${I('i-working','sm spin')} <b>3</b> working</span>
     <span class="muted">${I('i-idle','sm')} 3 idle</span>
+    <span class="muted">${I('i-stop','sm')} 1 ended</span>
    </div><span class="sp"></span>${sub||''}</div>`;
 }
 const QOPTS=['Accept legacy cookie for 30 days','Migrate on first request','Invalidate all at deploy'];
@@ -1037,7 +1057,8 @@ function ibxRow(s){
   let extra='';
   if(s.st==='needs') extra=inlineGate(s);
   if(s.st==='done') extra=`<div class="donebox"><span class="stat">${s.stat[0]} <span class="add">${s.stat[1]}</span> <span class="del">${s.stat[2]}</span></span><button class="btn sm ghost" data-go="session">${I('i-file','xs')}Review changes</button><button class="btn sm ghost">${I('i-eye','xs')}Mark seen ${kbd('E')}</button></div>`;
-  if(s.st==='failed') extra=`<div class="donebox"><button class="btn sm">${I('i-refresh','xs')}Retry last step</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
+  if(s.st==='failed') extra=`<div class="donebox"><button class="btn sm" title="Start the agent again, with this session's earlier transcript">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
+  if(s.st==='ended') extra=`<div class="donebox"><button class="btn sm" title="Start the agent again, with this session's earlier transcript">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost" data-go="session">${I('i-file','xs')}Review changes</button></div>`;
   return `<div class="ibx-item${sel}"><div class="ibx-row" ${s.st==='needs'&&s.id!==state.sel?`data-selrow="${s.id}"`:'data-go="session"'}>
     <div>${stPill(s.st)}</div>
     <div class="sn">${nameLine}${sub}</div>
@@ -1049,7 +1070,7 @@ function ibxRow(s){
   </div>${extra}</div>`;
 }
 function homeA(){
-  const groups=[['needs','Needs you','Answer here or press Enter to open'],['failed','Failed',''],['done','Finished, not seen yet','<button class="btn sm ghost">Mark all seen</button>'],['working','Working',''],['idle','Idle','']];
+  const groups=[['needs','Needs you','Answer here or press Enter to open'],['failed','Failed',''],['done','Finished, not seen yet','<button class="btn sm ghost">Mark all seen</button>'],['working','Working',''],['idle','Idle',''],['ended','Ended','']];
   return homeHeader(`<button class="btn sm ghost">${I('i-eye','xs')}Mark all seen</button>`)+homeToolbar()+
   `<div class="ibx"><div class="ibx-head"><span>Status</span><span>Session</span><span class="drvh">Driver</span><span>Host</span><span>Project · branch</span><span class="r">Last</span><span class="r">Cost</span></div>`+
   groups.map(([st,label,act])=>{const L=S.filter(s=>s.st===st);
@@ -1077,7 +1098,7 @@ function acard(s){
       <div class="foot">${srcCap('hand')}<span class="sp"></span><button class="btn sm ghost" data-gate="hand">Payload ${I('i-chevr','xs')}</button></div>`;
     }
   } else if(s.st==='failed'){
-    body=`<div class="l err">${s.line}</div><div class="foot"><button class="btn sm">${I('i-refresh','xs')}Retry last step</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
+    body=`<div class="l err">${s.line}</div><div class="foot"><button class="btn sm">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
   } else {
     body=`<div class="l">${s.line}</div><div class="foot"><span class="mono" style="font-size:11.5px">${s.stat[0]} <span class="add">${s.stat[1]}</span> <span class="del">${s.stat[2]}</span></span><span class="sp"></span><button class="btn sm ghost" data-go="session">${I('i-file','xs')}Review</button><button class="btn sm ghost">${I('i-eye','xs')}Mark seen</button></div>`;
   }
@@ -1090,9 +1111,9 @@ function homeC(){
   const cols=[['needs','Needs you',S.filter(s=>s.st==='needs')],['failed','Failed',state.quiet?[]:S.filter(s=>s.st==='failed')],['done','Finished · unseen',S.filter(s=>s.st==='done'&&s.unseen)]];
   const colsHtml=cols.map(([st,l,L])=>L.length?`<div class="acol ${st==='needs'?'wide':''}"><div class="acol-h c-${st}">${stIcon(st,'sm')}${l}<span class="cnt">${L.length}</span>${st==='done'?`<span class="sp"></span><button class="btn sm ghost">Mark all seen</button>`:''}</div>${L.map(acard).join('')}</div>`
     :`<div class="acol empty" title="${l}: nothing right now">${I('i-'+st,'sm')}<span class="vlab">${l} · none</span></div>`).join('');
-  const W=S.filter(s=>s.st==='working'),Id=S.filter(s=>s.st==='idle');
-  const strip=`<div class="quiet"><div class="quiet-h"><span class="c-working" style="display:inline-flex;gap:5px;align-items:center">${I('i-working','sm spin')}<b>${W.length} working</b></span><span>·</span><span style="display:inline-flex;gap:5px;align-items:center">${I('i-idle','sm')}<b>${Id.length} idle</b></span><span class="faint">Nothing for you here. A card appears above when one of them asks, fails or finishes.</span><span class="sp"></span><button class="btn sm" id="strip-tg" aria-expanded="${state.strip}">${state.strip?'Hide':'Show all'} ${I(state.strip?'i-chev':'i-chevr','xs')}</button></div>
-    ${state.strip?`<div class="qrows">${[...W,...Id].map(qrow).join('')}</div>`:''}</div>`;
+  const W=S.filter(s=>s.st==='working'),Id=S.filter(s=>s.st==='idle'),En=S.filter(s=>s.st==='ended');
+  const strip=`<div class="quiet"><div class="quiet-h"><span class="c-working" style="display:inline-flex;gap:5px;align-items:center">${I('i-working','sm spin')}<b>${W.length} working</b></span><span>·</span><span style="display:inline-flex;gap:5px;align-items:center">${I('i-idle','sm')}<b>${Id.length} idle</b></span><span style="display:inline-flex;gap:5px;align-items:center">${I('i-ended','sm')}<b>${En.length} ended</b></span><span class="faint">Nothing for you here. A card appears above when one of them asks, fails or finishes.</span><span class="sp"></span><button class="btn sm" id="strip-tg" aria-expanded="${state.strip}">${state.strip?'Hide':'Show all'} ${I(state.strip?'i-chev':'i-chevr','xs')}</button></div>
+    ${state.strip?`<div class="qrows">${[...W,...Id,...En].map(qrow).join('')}</div>`:''}</div>`;
   return homeHeader()+homeToolbar(`<span class="faint" style="font-size:11.5px">Example data</span><div class="seg"><button id="quiet-off" aria-pressed="${!state.quiet}">Busy</button><button id="quiet-on" aria-pressed="${state.quiet}">No failures</button></div>`)+
     `<div class="attn"><div class="acols">${colsHtml}</div>${strip}</div>`;
 }
@@ -1119,41 +1140,67 @@ function permGate(){
     ${tellBox()}
   </div>`;
 }
-function composer(withSlash){
+function composer(withSlash,ended){
   const items=[['/review','Review uncommitted changes','built-in'],['/compact','Summarize history to free context (38% used)','built-in'],['/plan','Switch to plan mode until you approve','built-in'],['/model','Change model for this session','built-in'],['/handoff','Delegate a task to another session','Marsad'],['/db-migrations','Run the migration checklist skill','skill · host'],['/cost','Show token use and cost','built-in']];
   return `<div class="composer-wrap"><div class="composer">
     ${withSlash?`<div class="slash" role="listbox">${items.map((it,i)=>`<div class="it ${i===0?'on':''}"><b>${it[0]}</b><span>${it[1]}</span><span class="src">${it[2]}</span></div>`).join('')}</div>`:''}
-    <textarea id="composer-ta" aria-label="Message">${withSlash?'/':''}</textarea>
+    <textarea id="composer-ta" aria-label="Message" placeholder="${ended==='blocked'?'This agent cannot pick a conversation back up.':ended?'This session has ended; sending a message continues it':'Message the agent'}"${ended==='blocked'?' disabled':''}>${withSlash?'/':''}</textarea>
+    ${ended==='blocked'?`<div class="comp-msg">Cannot send: This agent cannot pick a conversation back up.</div>`:''}
+    ${ended==='fail'?`<div class="comp-msg c-failed" role="alert">Not sent. The session had ended and could not be continued, so nothing was sent: the agent binary was not found. Your message is still here.</div>`:''}
     <div class="comp-bar">
       <button class="iconbtn" title="Attach">${I('i-clip','sm')}</button>
       <button class="iconbtn" id="slash-btn" title="Slash commands">${I('i-slash','sm')}</button>
       <button class="pick">${I('i-shield','xs')}Default mode ${I('i-chev','xs')}</button>
       <button class="pick">${I('i-sparkle','xs')}claude-sonnet-4.5 ${I('i-chev','xs')}</button>
       <span class="sp"></span><span class="faint" style="font-size:11.5px">${kbd('Enter')} send · ${kbd('⇧ Enter')} new line · ${kbd('↑')} earlier prompts</span>
-      <button class="btn primary sm">${I('i-send','xs')}Send</button>
+      <button class="btn primary sm"${ended==='blocked'?' disabled':''}>${I('i-send','xs')}Send</button>
     </div></div></div>`;
 }
 
 /* ================= SCREEN: SESSION ================= */
 function sessionHead(){
-  const s=by('s7');
+  const ended=state.vars.session!=='run';
+  const s=ended?by('s16'):by('s7');
   const tabs=[['activity','Activity'],['changes','Changes','7'],['config','Config'],['terminal','Terminal']];
   return `<div class="sd-head">
    <div class="crumbs"><a data-go="home">${I('i-inbox','xs')} Inbox</a>${I('i-chevr','xs')}<span>ledgerline</span>${I('i-chevr','xs')}<span style="color:var(--fg)">${s.name}</span></div>
-   <div class="sd-title"><h1 class="h1">${s.name}</h1>${stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
-     <button class="btn sm">${I('i-pause','xs')}Pause</button><button class="btn sm">${I('i-stop','xs')}Stop</button><button class="iconbtn" title="More">${I('i-dots','sm')}</button></div>
+   <div class="sd-title"><h1 class="h1">${s.name}</h1>${ended?stPill('ended'):stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
+     ${ended?(state.vars.session==='blocked'
+       ?`<button class="btn sm" disabled title="This agent cannot pick a conversation back up.">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost">${I('i-x','xs')}Delete</button>`
+       :`<button class="btn sm" title="Start the agent again, with this session's earlier transcript">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost">${I('i-x','xs')}Delete</button>`)
+      :`<button class="btn sm" title="Cancel the current turn; the agent keeps running">${I('i-pause','xs')}Interrupt</button><button class="btn sm" title="Shut the agent down. The session is kept and can be continued.">${I('i-stop','xs')}End session</button>`}<button class="iconbtn" title="More">${I('i-dots','sm')}</button></div>
+   ${state.vars.session==='blocked'?`<div class="sd-ended" role="status">${I('i-stop','sm')}This agent cannot pick a conversation back up.</div>`:''}
    <div class="sd-meta">
      <span class="kv">${drv('cc')}<span class="faint mono">v2.1.4</span></span>
      <span class="kv">${hostEl('x1')}${conn('ok','Connected · local')}</span>
-     <span class="kv">${I('i-folder','sm')}<span class="mono">~/src/ledgerline</span></span>
-     <span class="kv">${I('i-branch','sm')}<span class="mono">refactor/auth-mw</span><span class="faint">3 ahead of main</span></span>
+     <span class="kv">${I('i-folder','sm')}<span class="mono">${ended?'~/src/marsad':'~/src/ledgerline'}</span></span>
+     <span class="kv">${I('i-branch','sm')}<span class="mono">${ended?'release/1.3':'refactor/auth-mw'}</span>${ended?'':'<span class="faint">3 ahead of main</span>'}</span>
      <span class="kv ctx">Context <span class="bar"><i style="width:38%"></i></span><span class="tnum">38%</span></span>
      <span class="kv">${I('i-coin','sm')}<span class="tnum">$2.41</span><span class="faint">· 1h 12m</span></span>
    </div>
    <div class="tabs" role="tablist">${tabs.map(([k,l,n])=>`<button role="tab" data-tab="${k}" aria-selected="${state.tab===k}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div>
   </div>`;
 }
+const ownTerminal=()=>`<div><h4>Open in your own terminal</h4><div class="own">
+     <div class="own-row"><code>claude --resume 7d977a39-1b5e-4c2a-9f10-3a6d5e1c8b24</code><button class="iconbtn" title="Copy the command">${I('i-copy','sm')}</button></div>
+     <div class="faint" style="font-size:11.5px">Run it in this folder</div>
+     <div class="own-row"><code>/home/me/src/marsad</code><button class="iconbtn" title="Copy the folder">${I('i-copy','sm')}</button></div>
+     <p class="faint">This opens the same conversation in the agent’s own program. The agent’s own session list may not show conversations started by other tools.</p></div></div>`;
+function endedActivity(){
+  const blocked=state.vars.session==='blocked';
+  return `<div class="sd-body"><div class="tr-wrap"><div class="transcript"><div class="tr">
+   <div class="msg-user">Draft the 1.3 release notes from the merged PRs since 1.2.</div>
+   <div class="msg-ai"><div class="who">${drv('cc',true)} Claude Code</div><p>Done: CHANGELOG.md has the 1.3 section, grouped by area. Nothing else needs your attention.</p></div>
+   <div class="msg-user" data-delivery="not_sent"><div class="md">Also add the upgrade notes.</div><div class="msg-state c-failed">${I('i-warn','xs')} Not sent — session ended</div></div>
+   <div class="notice faint" style="font-size:12px">The request to start pdf-font-checker ended without your answer. The session was ended while it was waiting.</div>
+  </div></div>${composer(false,blocked?'blocked':state.vars.session==='fail'?'fail':'ended')}</div>
+  <aside class="side">
+   <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Cost so far</dt><dd>$0.29 <span class="faint">· 2 turns</span></dd><dt>Started</dt><dd>3d ago</dd></dl></div>
+   ${blocked?'':ownTerminal()}
+  </aside></div>`;
+}
 function activityTab(){
+  if(state.vars.session!=='run') return endedActivity();
   return `<div class="sd-body"><div class="tr-wrap"><div class="transcript"><div class="tr">
    <div class="msg-user">Move session auth from express-session to the new <span class="code-inline">authMiddleware</span> in packages/auth. Existing cookies must keep working during the rollout. Don't touch the billing routes.</div>
    <div class="think">${I('i-chevr','xs')}${I('i-sparkle','xs')}Thought for 14s</div>
@@ -1198,6 +1245,7 @@ apps/api/src/routes/invoices.ts:31     const org = req.session.orgId
      <div>${I('i-needs','sm c-needs')}Migration for session_tokens</div><div class="muted">${I('i-idle','sm')}Fix cookie-compat tests</div><div class="muted">${I('i-idle','sm')}Remove express-session dependency</div></div></div>
    <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Cost so far</dt><dd>$2.41 <span class="faint">· 3 turns</span></dd><dt>Context window</dt><dd><span class="kv ctx"><span class="bar"><i style="width:38%"></i></span><span>38%</span></span></dd><dt>Tokens in / out</dt><dd>412k / 38k</dd><dt>Cache hits</dt><dd>71%</dd><dt>Written to cache</dt><dd>9k</dd><dt>Started</dt><dd>14:30</dd><dt>Config</dt><dd><a class="c-accent" data-go="config" style="cursor:pointer">Claude Code + 2 overrides</a></dd></dl></div>
    <div><h4>Cost by model</h4><dl class="kvl"><dt class="mono">claude-sonnet-4.5</dt><dd>$2.07</dd><dt class="mono">claude-haiku-4.5</dt><dd>$0.34</dd></dl></div>
+   ${ownTerminal()}
   </aside></div>`;
 }
 function changesTab(){
@@ -1324,7 +1372,23 @@ function graphScreen(){
      <div class="gctl"><button class="btn sm">${I('i-minus','xs')}</button><span class="btn sm tnum" style="pointer-events:none">100%</span><button class="btn sm">${I('i-plus','xs')}</button><button class="btn sm">Fit</button></div>
    </div>${inspector()}</div>`;
 }
+function spawnPanel(){
+  const row=(ic,cls,who,name,txt,t)=>`<div class="h">${I(ic,'sm '+cls)}<div><b>${who}</b> asked for “${name}”<div class="d">${txt}</div></div><span class="w">${t}</span></div>`;
+  return `<aside class="insp">
+   <div class="gate"><div class="gate-h">${I('i-sparkle','sm')}Spawn request · 2m</div>
+    <div style="font-size:12.5px"><b>invoice-export-orchestrator</b> wants to start <b>pdf-font-checker</b> on hetzner-ax41: Checks the Arabic font fallback in rendered invoice PDFs</div>
+    <div class="choices">${choiceBtns([['Allow once','allow'],['Always allow spawning in this workstream','always'],['Deny','deny']])}</div></div>
+   <div class="sec"><div class="eyebrow">Recent spawn requests</div><div class="hist">
+    ${row('i-done','c-done','invoice-export-orchestrator','csv-checker','It was started.','15:02')}
+    ${row('i-clock','faint','invoice-export-orchestrator','log-scraper','The turn that asked was interrupted before the request was answered.','14:40')}
+    ${row('i-ban','c-failed','csv-schema-worker','gpu-trainer','It was refused. Spawning is limited to 8 agents in this workstream. <span class="mono">(spawn_limit)</span>','14:12')}
+    ${row('i-ban','c-failed','invoice-export-orchestrator','pdf-font-checker','It was denied.','13:51')}
+    ${row('i-clock','faint','csv-schema-worker','lint-bot','The asking session ended before the request was answered.','13:20')}</div></div>
+   <div class="faint small" style="font-size:12px">Select an agent or a connection.</div>
+  </aside>`;
+}
 function inspector(){
+  if(state.vars.graph==='spawn') return spawnPanel();
   if(state.gsel){
     const s=by(state.gsel);
     return `<aside class="insp"><div class="sec"><div class="eyebrow">Agent</div><div class="h2">${s.name}</div><div style="display:flex;gap:8px;flex-wrap:wrap">${stPill(s.st)}${drv(s.drv)}</div>
@@ -1457,7 +1521,7 @@ function newWsDialog(){
 
 /* ================= SCREEN: NEW SESSION ================= */
 function newScreen(){
-  const ws=state.vars.new==='w';
+  const ws=state.vars.new==='w', cont=state.vars.new==='c', bad=state.vars.new==='f';
   const vers={cc:'2.1.4',cx:'0.58.0',oc:'1.3.2',kc:'7.8.27'};
   const rows=[['Refactor invoice totals rounding','“Totals are off by a cent on multi-currency invoices. Find where we round…”','marsad','2h ago',184,1],
    ['Fix Stripe webhook idempotency','“Stripe retries are creating duplicate payments, add an idempotency key…”','term','yesterday',61,0],
@@ -1470,12 +1534,14 @@ function newScreen(){
    <div class="dlg-h"><span class="h2">${ws?'Add agent to Docs search revamp':'New session'}</span><span class="faint" style="font-size:12px">${ws?'Same form as New session. Nothing starts until you launch the workstream.':'Starts on the host you pick and appears in your inbox'}</span><span class="sp"></span><button class="iconbtn" data-go="${close}" title="Close">${I('i-x','sm')}</button></div>
    <div class="dlg-b"><div class="ns">
     <div class="col">
+     <div class="field"><label for="nm">Name <span class="faint" style="font-weight:400">optional</span></label><div class="input"><input id="nm" placeholder="Name this session" ${cont?'value="invoice-totals-rounding" disabled':bad?'value="Health check"':''}></div><span class="hint">${ws?"The agent's name in this workstream (the first words of its task by default).":cont?'The session keeps its own name.':'Shown in your Inbox; the first message by default.'}</span></div>
      <div class="field"><label>Agent</label><div class="drvpick">${Object.keys(DRV).map(d=>`<div class="dp ${d==='cc'?'on':''}">${drv(d)}<span class="v">v${vers[d]}</span></div>`).join('')}</div></div>
      <div class="field"><label>Host</label><div class="hostpick">
        <div class="hp on">${I('i-laptop','sm')}<b>thinkpad-x1</b><span class="faint">Ubuntu · local</span><span class="sp"></span>${conn('ok','Connected')}</div>
        <div class="hp">${I('i-server','sm')}<b>hetzner-ax41</b><span class="faint">Debian · SSH</span><span class="sp"></span>${conn('ok','Connected')}</div>
        <div class="hp dis">${I('i-monitor','sm')}<b>win-build</b><span class="faint">Windows · SSH</span><span class="sp"></span>${conn('warn','Reconnecting in 4s')}</div></div></div>
-     <div class="field"><label>Project folder</label><div class="input">${I('i-folder','sm')}<input value="~/src/ledgerline" aria-label="Project folder"><span class="mono faint" style="font-size:11px">${I('i-branch','xs')} main</span></div>
+     <div class="field${bad?' bad':''}"><label>Project folder</label><div class="input">${I('i-folder','sm')}<input value="${bad?'src/project':'~/src/ledgerline'}" aria-label="Project folder">${bad?'':`<span class="mono faint" style="font-size:11px">${I('i-branch','xs')} main</span>`}</div>
+       ${bad?`<span class="err" role="alert">working directory "src/project" is not an absolute path (a leading ~ stands for the home directory of the user the host runs as; ~user and relative paths are not accepted)</span>`:''}
        <span class="hint">Recent: ~/src/marsad · ~/src/docs-site · ~/src/tilemap-renderer</span></div>
      <div class="two"><div class="field"><label>Model</label><div class="selbox"><span class="mono" style="font-size:12px">claude-sonnet-4.5</span>${I('i-chev','sm')}</div></div>
       <div class="field"><label>Mode</label><div class="selbox"><span>Default · ask before edits</span>${I('i-chev','sm')}</div></div></div>
@@ -1489,7 +1555,8 @@ function newScreen(){
       <span class="hint">23 Claude Code sessions in ~/src/ledgerline on thinkpad-x1, including ones started in a terminal</span>
       <div class="slist"><div class="sh"><span></span><span>Title · first prompt</span><span>Started in</span><span style="text-align:right">Last</span><span style="text-align:right">Msgs</span></div>
        ${rows.map(r=>`<div class="sr ${r[5]?'on':''}"><span>${r[5]?I('i-check','xs c-accent'):''}</span><span class="tt"><b${r[0].startsWith('(')?' class="faint"':''}>${r[0]}</b><span>${r[1]}</span></span><span>${r[2]==='term'?`<span class="tag trm">${I('i-term','xs')}Terminal</span>`:`<span class="tag">${I('i-dome','xs')}Marsad</span>`}</span><span class="r">${r[3]}</span><span class="r">${r[4]}</span></div>`).join('')}</div>
-      <span class="hint">Showing 6 of 23 · scroll for more</span></div>
+      <span class="hint">Showing 6 of 23 · scroll for more</span>
+      ${cont?`<div class="recent owned" role="status">${I('i-dome','sm')}<div class="tx">This conversation belongs to your session “invoice-totals-rounding”. Continue picks that session up, with its earlier transcript.</div></div>`:''}</div>
      <div class="field"><label for="fp">Message to send on resume <span class="faint" style="font-weight:400">optional</span></label><textarea id="fp" class="ta" style="resize:none;font:inherit;min-height:48px">Rebase onto main first, then finish the rounding tests for multi-currency invoices.</textarea></div>
     </div></div></div>
    <div class="dlg-f">${ws?`<span class="faint" style="font-size:12px;display:inline-flex;gap:6px;align-items:center">${I('i-lock','xs')}Wasl connector will be added automatically</span>`:`<label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--fg-2)"><span class="cb"></span>Add to workstream…</label>`}<span class="sp"></span><button class="btn" data-go="${close}">Cancel</button><button class="btn primary">${ws?`${I('i-plus','xs')}Add to design`:`${I('i-refresh','xs')}Continue session ${kbd('Ctrl Enter')}`}</button></div>

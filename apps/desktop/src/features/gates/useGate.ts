@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt } from "../../bridge/wire";
-import { gatePendingKey, useActions, useApp, usePending, useSessionReach, type SessionView } from "../../state";
+import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt, SessionKey } from "../../bridge/wire";
+import { endedSentence } from "../../lib/endWords";
+import { gateWhat } from "../../lib/gatewords";
+import { gatePendingKey, useActions, useApp, usePending, useSessionReach, type AppState, type SessionView } from "../../state";
 import { toast } from "../../ui/toast";
 import { gateChoices, type GateChoice } from "./choices";
 
@@ -16,6 +18,24 @@ export function gateGist(g: GateRequest): string {
     default:
       return "The agent no longer waits for this decision.";
   }
+}
+
+/** Why the request behind a gate ended, as far as the app has been told: the hub's spawn outcome, else the session's own gate resolution. */
+export function endedWhy(state: AppState, key: SessionKey, requestId: string): { code: string; detail?: string | null } | null {
+  for (const v of Object.values(state.workstreams)) {
+    const r = v.recent_spawns?.find((x) => x.request_id === requestId);
+    if (r) return { code: r.end.code, detail: r.detail };
+  }
+  for (const e of state.transcripts[key]?.events ?? []) {
+    if (e.kind === "agent" && e.event.type === "gate_resolved" && e.event.request_id === requestId && e.event.reason) return e.event.reason;
+  }
+  return null;
+}
+
+/** The notice for a request that went away without an answer from here: its reason when known, else only that it no longer waits. */
+export function goneNotice(gate: GateRequest, why: { code: string; detail?: string | null } | null): { title: string; detail: string } {
+  if (!why) return { title: "No longer needed", detail: gateGist(gate) };
+  return { title: "Request ended", detail: endedSentence(gateWhat(gate), why) };
 }
 
 /**
@@ -39,7 +59,7 @@ export function useGoneNotice(view: SessionView, pg: PendingGate, open: boolean)
       if (!wasOpen || ours) return;
       const snap = store.get().sessions[view.key];
       if (snap?.pending_gates.some((g) => g.gate.request_id === rid)) return;
-      toast({ tone: "info", title: "No longer needed", detail: gateGist(gate) });
+      toast({ tone: "info", ...goneNotice(gate, endedWhy(store.get(), view.key, rid)) });
     },
     [store, view.key, rid],
   );

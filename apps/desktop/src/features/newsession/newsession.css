@@ -69,3 +69,5 @@
 .ns-prompt .comp-atts{padding:8px 8px 0}
 .ns-attach{display:flex;align-items:center;gap:8px;padding:0 8px 8px}
 .ns-prompt .comp-msg{padding:0 10px 8px}
+.recent.owned{align-items:flex-start}
+.recent.owned .tx{white-space:normal;line-height:1.45}

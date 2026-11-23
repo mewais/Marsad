@@ -6,7 +6,7 @@ import { inventoryFor, FIXTURE_HOSTS } from "../../src/bridge/fixture/catalog";
 import { renderApp } from "../helpers";
 
 const inv = () => inventoryFor(FIXTURE_HOSTS[0], "~/src/ledgerline", Date.now()).find((d) => d.driver === "claude")!;
-const form = (p: Partial<NewSessionForm> = {}): NewSessionForm => ({ host: "x1", driver: "claude", cwd: "~/src/ledgerline", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "", ...p });
+const form = (p: Partial<NewSessionForm> = {}): NewSessionForm => ({ host: "x1", name: "", driver: "claude", cwd: "~/src/ledgerline", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "", ...p });
 
 describe("new session: logic", () => {
   it("lists the CLI's sessions newest first and tags where they were started", () => {
