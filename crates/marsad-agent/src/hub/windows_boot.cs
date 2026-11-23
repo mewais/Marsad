@@ -84,17 +84,19 @@ static class MarsadBoot
             string[] cmd = ReadLine().Split(' ');
             if (cmd[0] == "UPLOAD")
             {
-                long left = long.Parse(cmd[1]);
+                long total = long.Parse(cmd[1]);
+                long left = total;
                 string tmp = exe + ".new." + pid;
                 try
                 {
+                    // Exactly the announced number of bytes, or nothing is installed.
                     using (var f = File.Create(tmp))
                     {
                         var buf = new byte[65536];
                         while (left > 0)
                         {
                             int n = input.Read(buf, 0, (int)Math.Min(buf.Length, left));
-                            if (n <= 0) throw new Exception("the connection closed during the upload");
+                            if (n <= 0) throw new Exception("received " + (total - left) + " of " + total + " bytes of the helper; not installed");
                             f.Write(buf, 0, n);
                             left -= n;
                         }

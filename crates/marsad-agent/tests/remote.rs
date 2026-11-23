@@ -321,7 +321,34 @@ async fn build_mismatch_restarts_the_remote_daemon() {
         .expect("the old daemon exited")
         .unwrap();
     assert!(st.success());
-    stop_hub(&c).await;
+    // The mismatch is on record: what the hub is and what it found running.
+    drop(fleet);
+    drop(c);
+    let data = d.path().join("l");
+    let out = tokio::process::Command::new(agent())
+        .arg("stop")
+        .arg("--data")
+        .arg(&data)
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success());
+    let log = std::fs::read_to_string(
+        marsad_proto::layout::Layout::resolve(data, None)
+            .unwrap()
+            .diag()
+            .join("daemon.ndjson"),
+    )
+    .unwrap();
+    let mismatch: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|r| r["ev"] == "boot.build_mismatch")
+        .collect();
+    assert_eq!(mismatch.len(), 1, "{log}");
+    assert_eq!(mismatch[0]["host"], "box");
+    assert_eq!(mismatch[0]["found"], "0.0.0+old");
+    assert_ne!(mismatch[0]["expected"], "0.0.0+old");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -587,4 +614,91 @@ async fn key_plus_password_second_factor() {
     c.remove_host(&id).await.unwrap();
     stop_hub(&c).await;
     pkill(&format!("/home/{TEST_USER}/.marsad"));
+}
+
+/// Runs the real POSIX bootstrap on the sshd host (the exact command the hub sends) with
+/// `input` as the hub's side of the conversation, then closes stdin.
+async fn bootstrap_with(sshd: &Sshd, input: Vec<u8>) -> std::process::Output {
+    use tokio::io::AsyncWriteExt;
+    let entry = marsad_proto::hosts::HostEntry {
+        id: HostId::new("t"),
+        name: "t".into(),
+        kind: sshd.kind(&sshd.key),
+        platform: None,
+        created_at_ms: 0,
+        interactive_auth: false,
+        local_files: false,
+        machine: None,
+    };
+    let argv = marsad_agent::hub::transport::bootstrap_argv(
+        &entry,
+        marsad_agent::hub::transport::RemoteShell::Posix,
+    )
+    .unwrap();
+    let mut child = tokio::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(&input).await.unwrap();
+    drop(stdin);
+    tokio::time::timeout(T, child.wait_with_output())
+        .await
+        .expect("the bootstrap ended")
+        .unwrap()
+}
+
+/// The remote end of an upload installs the helper only when it received exactly the number of
+/// bytes announced: `head -c` ends cleanly on a short input, so a truncated upload used to be
+/// moved into place. A complete one is still installed and started.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_bootstrap_installs_only_a_complete_upload() {
+    let d = TempDir::new();
+    let sshd = Sshd::start(d.path());
+    let dir = sshd.installed_agent().parent().unwrap().to_path_buf();
+
+    // 400 of the announced 1000 bytes, then the connection ends cleanly.
+    let mut short = b"UPLOAD 1000\n".to_vec();
+    short.extend(std::iter::repeat_n(b'x', 400));
+    let out = bootstrap_with(&sshd, short).await;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(70), "stderr: {stderr}");
+    assert!(
+        stderr.contains("received 400 of 1000 bytes of the helper; not installed"),
+        "stderr: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("MARSAD-BOOT "), "{stdout}");
+    assert!(!stdout.contains("MARSAD-OK"), "{stdout}");
+    assert!(
+        !sshd.installed_agent().exists(),
+        "a truncated helper was installed"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+
+    // The whole file: installed, answered, started (the "helper" is a script that says so).
+    let payload = b"#!/bin/sh\necho PAYLOAD-RAN\n";
+    let mut whole = format!("UPLOAD {}\n", payload.len()).into_bytes();
+    whole.extend_from_slice(payload);
+    let out = bootstrap_with(&sshd, whole).await;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert!(lines[0].starts_with("MARSAD-BOOT "));
+    assert_eq!(&lines[1..], ["MARSAD-OK", "PAYLOAD-RAN"]);
+    assert_eq!(std::fs::read(sshd.installed_agent()).unwrap(), payload);
 }

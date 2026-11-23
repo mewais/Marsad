@@ -3,22 +3,38 @@
 //! reconnects) and the hub's link states into [`FleetEvent`]s.
 //!
 //! Replay and resume follow [`super::ring`].
+//!
+//! Each host's session feed records its life (`fleet.feed`: started, lagged, undecodable event,
+//! ended with the service's error code): a feed that ends leaves the host's sessions as they
+//! last were, so the end must be on record.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use marsad_proto::diag::{FeedEvent, MarsadEvent};
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink, GitSummary};
 use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::{HostId, LinkState};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use wasit_control::{Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
+use wasit_diag::{ErrorInfo, Ident};
 use wasit_runtime::wire::{topics as rt_topics, HostEvent, SessionSnapshot};
 use wasit_runtime::{SessionManager, StreamEnd};
 
 use super::gitwatch::GitWatch;
 use super::ring::{self, Joined, Ring};
+use crate::diag::{self, emit};
 
 const INPUT_QUEUE: usize = 1024;
+
+/// `fleet.feed` for `host`.
+fn feed_record(host: &HostId, event: FeedEvent, error: Option<ErrorInfo>) {
+    emit(MarsadEvent::FleetFeed {
+        host: Ident::new(host.as_str()),
+        event,
+        error,
+    });
+}
 
 enum Input {
     HostUpserted(Box<HostEntry>, FleetLink),
@@ -270,6 +286,7 @@ impl Fleet {
         tokio::spawn(async move {
             let mut last: Option<String> = None;
             let mut failures = 0u32;
+            feed_record(&host, FeedEvent::Started, None);
             loop {
                 let mut s = manager.subscribe_host(last.as_deref());
                 while let Some(item) = s.next().await {
@@ -279,9 +296,13 @@ impl Fleet {
                             last = Some(c);
                             fleet.send(Input::Feed(host.clone(), ev)).await;
                         }
-                        Err(StreamEnd::Lagged) => break,
+                        Err(StreamEnd::Lagged) => {
+                            feed_record(&host, FeedEvent::Lagged, None);
+                            break;
+                        }
                         Err(StreamEnd::Error(e)) => {
-                            tracing::warn!(error = %e, "local session feed failed");
+                            // The feed resubscribes below; the text is the runtime's.
+                            feed_record(&host, FeedEvent::Ended, Some(diag::foreign("stream", &e)));
                             break;
                         }
                     }
@@ -304,20 +325,33 @@ impl Fleet {
                     ..DurableOpts::default()
                 },
             );
+            feed_record(&host, FeedEvent::Started, None);
             while let Some(item) = sub.next().await {
                 match item {
                     Ok((_, v)) => match serde_json::from_value::<HostEvent>(v) {
                         Ok(ev) => fleet.send(Input::Feed(host.clone(), ev)).await,
-                        Err(e) => {
-                            tracing::warn!(host = %host, error = %e, "undecodable host event")
-                        }
+                        // The event is dropped; the text quotes the host's JSON.
+                        Err(e) => feed_record(
+                            &host,
+                            FeedEvent::Undecodable,
+                            Some(diag::foreign("decode", &e.to_string())),
+                        ),
                     },
                     Err(e) => {
-                        tracing::warn!(host = %host, error = %e, "remote session feed failed");
+                        // A refusal the service will repeat (a non-retryable subscribe error):
+                        // the feed is over and the fleet no longer follows this host's
+                        // sessions. Recorded, not retried: nothing a retry could change.
+                        feed_record(
+                            &host,
+                            FeedEvent::Ended,
+                            Some(diag::foreign(&e.code, &e.message)),
+                        );
                         return;
                     }
                 }
             }
+            // The link was stopped (its host removed or the hub shutting down) or the topic ended.
+            feed_record(&host, FeedEvent::Ended, None);
         })
     }
 

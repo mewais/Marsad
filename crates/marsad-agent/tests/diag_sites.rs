@@ -16,10 +16,22 @@ const PATTERNS: &[&str] = &[
     "DiagEvent for ",
     "Sealed for ",
     "SealedEvent for ",
-    "DiagText::new(",
 ];
 
 const OURS: &str = "ErrorInfo::ours(";
+const TEXT: &str = "DiagText::new(";
+
+/// Files allowed to call `DiagText::new(`: `marsad-agent/src/diag.rs`, the one place free text
+/// is made, with three kinds of text and no others:
+/// * `transport` and `shape` (`Origin::Transport`): what ssh, `wsl.exe` or a host's bootstrap
+///   printed, the reason a connect failed as the user is shown it, and the first 120
+///   characters of what a host printed before its report. Design §4.4 keeps these "bounded,
+///   scrubbed" (the scrubber masks every registered secret, project path and the home
+///   directory; token-shaped runs are redacted): the evidence for "the host would not
+///   connect". Called from `hub/provision.rs` only.
+/// * `Reason` (`Origin::Own`): the same scrubbing for the words `serve` prints on stderr, so
+///   that the line carries what the record carries.
+const TEXT_ALLOW: &[&str] = &["marsad-agent/src/diag.rs"];
 
 /// Files allowed to call `ErrorInfo::ours(`, and what they pass:
 /// * `marsad-agent/src/diag.rs` (`diag::ours`, the only call): the `Display` of an error of
@@ -59,17 +71,33 @@ fn error_text_from_display_only_in_reviewed_places() {
     );
 }
 
-/// The allow-listed file really contains the call (so the allow-list cannot go stale).
 #[test]
-fn the_allow_list_is_live() {
+fn free_text_from_a_transport_only_in_reviewed_places() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for f in OURS_ALLOW {
+    let found = scan::find(&root, TEXT_ALLOW, |line| scan::mentions(line, TEXT));
+    assert!(
+        found.is_empty(),
+        "new `DiagText::new` sites need review (allow-list in {}):\n{}",
+        file!(),
+        found.join("\n")
+    );
+}
+
+/// Each allow-listed file really contains its call (so an allow-list cannot go stale).
+#[test]
+fn the_allow_lists_are_live() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (f, call) in OURS_ALLOW
+        .iter()
+        .map(|f| (f, OURS))
+        .chain(TEXT_ALLOW.iter().map(|f| (f, TEXT)))
+    {
         let path = root.join("crates").join(f);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
             text.lines()
-                .any(|l| !l.trim_start().starts_with("//") && scan::mentions(l, OURS)),
-            "{f} no longer calls {OURS}: remove it from the allow-list"
+                .any(|l| !l.trim_start().starts_with("//") && scan::mentions(l, call)),
+            "{f} no longer calls {call}: remove it from the allow-list"
         );
     }
 }
@@ -80,9 +108,12 @@ fn the_scan_sees_each_pattern() {
         "wasit_diag::diag_value!(TraceId => Ident, |t| Ident::new(&t.0));",
         "impl DiagValue for Prompt {",
         "impl wasit_diag::DiagEvent for X {",
-        "let t = DiagText::new(Origin::Own, &e.to_string());",
     ] {
         assert!(PATTERNS.iter().any(|p| scan::mentions(line, p)), "{line}");
     }
     assert!(scan::mentions("ErrorInfo::ours(Code::st(\"x\"), e)", OURS));
+    assert!(scan::mentions(
+        "let t = DiagText::new(Origin::Own, &e.to_string());",
+        TEXT
+    ));
 }

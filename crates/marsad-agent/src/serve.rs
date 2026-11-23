@@ -83,19 +83,32 @@ fn fail(msg: impl std::fmt::Display, code: u8) -> ExitCode {
 }
 
 /// A startup step failed: the reason is recorded (`daemon.failed`, in the daemon's file once it
-/// holds its lock, else in the shared one) as well as printed.
+/// holds its lock, else in the shared one) and printed on stderr, i.e. in `marsad-agent.log`.
+/// What is printed is what is recorded: the stage, the code and the OS's reason or the path of
+/// Marsad's own files, never text that may quote stored data (the Wasl node's journal, the
+/// hub's documents). With `MARSAD_LOG` set the full error is printed instead (`full`).
 fn startup_failed(
     stage: StartStage,
     code: u8,
-    error: Option<wasit_diag::ErrorInfo>,
-    msg: impl std::fmt::Display,
+    reason: diag::Reason,
+    full: impl std::fmt::Display,
 ) -> ExitCode {
     emit(MarsadEvent::DaemonFailed {
         stage,
         exit: i32::from(code),
-        error,
+        error: Some(reason.info.clone()),
     });
-    fail(msg, code)
+    if diag::developer() {
+        fail(full, code)
+    } else {
+        fail(
+            format!(
+                "startup failed at {stage:?} (exit {code}): {}",
+                reason.words()
+            ),
+            code,
+        )
+    }
 }
 
 pub async fn serve(o: Options) -> ExitCode {
@@ -105,14 +118,14 @@ pub async fn serve(o: Options) -> ExitCode {
         return startup_failed(
             StartStage::DataDir,
             1,
-            Some(diag::io(&e)),
+            diag::Reason::io(format!("cannot create {}", layout.data.display()), &e),
             format!("cannot create {}: {e}", layout.data.display()),
         );
     }
     let cfg = match runtime_config(&o) {
         Ok(c) => c,
         Err(e) => {
-            return startup_failed(StartStage::Config, 2, Some(diag::ours("config", &e)), e);
+            return startup_failed(StartStage::Config, 2, diag::Reason::ours("config", &e), e);
         }
     };
     let listener = match wasit_control::bind_local_exclusive(o.socket_path()).await {
@@ -132,7 +145,7 @@ pub async fn serve(o: Options) -> ExitCode {
             return startup_failed(
                 StartStage::Listen,
                 1,
-                Some(diag::ours("listen", &e)),
+                diag::Reason::ours("listen", &e),
                 format!("cannot listen: {e}"),
             );
         }
@@ -174,7 +187,12 @@ pub async fn serve(o: Options) -> ExitCode {
     let manager = match SessionManager::new(cfg).await {
         Ok(m) => m,
         Err(e) => {
-            return startup_failed(StartStage::Sessions, 1, Some(diag::ours("sessions", &e)), e);
+            return startup_failed(
+                StartStage::Sessions,
+                1,
+                diag::Reason::ours("sessions", &e),
+                e,
+            );
         }
     };
     let phase = Instant::now();
@@ -205,7 +223,7 @@ pub async fn serve(o: Options) -> ExitCode {
             return startup_failed(
                 StartStage::Node,
                 1,
-                Some(diag::foreign(&e.code, &e.message)),
+                diag::Reason::foreign(&e.code, &e.message),
                 format!("cannot open the Wasl node: {e}"),
             );
         }
@@ -218,7 +236,7 @@ pub async fn serve(o: Options) -> ExitCode {
             return startup_failed(
                 StartStage::Executable,
                 1,
-                Some(diag::io(&e)),
+                diag::Reason::io("cannot locate the daemon executable", &e),
                 format!("cannot locate the daemon executable: {e}"),
             );
         }
@@ -257,7 +275,12 @@ pub async fn serve(o: Options) -> ExitCode {
             )
         })
     {
-        return startup_failed(StartStage::Services, 1, Some(diag::ours("services", &e)), e);
+        return startup_failed(
+            StartStage::Services,
+            1,
+            diag::Reason::ours("services", &e),
+            e,
+        );
     }
     let local: Arc<dyn Service> = Arc::new(local);
 
@@ -287,7 +310,7 @@ pub async fn serve(o: Options) -> ExitCode {
             }
             Err(e) => {
                 // Stored documents and the hub's other inputs may quote user data.
-                return startup_failed(StartStage::Hub, 1, Some(diag::foreign("hub", &e)), e);
+                return startup_failed(StartStage::Hub, 1, diag::Reason::foreign("hub", &e), e);
             }
         }
     } else {
@@ -315,7 +338,7 @@ pub async fn serve(o: Options) -> ExitCode {
             return startup_failed(
                 StartStage::Readiness,
                 1,
-                Some(diag::ours("readiness", &e)),
+                diag::Reason::ours("readiness", &e),
                 e,
             );
         }
@@ -356,7 +379,6 @@ pub async fn serve(o: Options) -> ExitCode {
             }
         },
         what = termination() => {
-            tracing::info!("{what}: shutting down (sessions keep running)");
             signal = Some(wasit_diag::Code::new(what));
             (ExitCode::SUCCESS, ShutdownWhy::Signal)
         }
@@ -391,6 +413,8 @@ async fn start_hub(
     let store = Store::open(o.layout().data.join("store"))
         .await
         .map_err(|e| e.to_string())?;
+    // Before any link starts: what a host's ssh prints may echo a stored secret.
+    crate::hub::hostenv::register_stored_secrets(&store, &HostId::new(host_id)).await;
     let fleet = Fleet::spawn();
     let entries = Arc::new(RwLock::new(Default::default()));
     let (ltx, lrx) = tokio::sync::mpsc::channel(16);

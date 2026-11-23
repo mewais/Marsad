@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use marsad_proto::diag::{HostChange, HostShape, HostsOp, LearnedWord, MarsadEvent};
 use marsad_proto::fleet::FleetLink;
 use marsad_proto::hosts::{HostDraft, HostEntry, HostKind, ImportSuggestions};
 use marsad_proto::{HostId, LinkState, MarsadError};
@@ -12,12 +13,37 @@ use marsad_store::Store;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use wasit_control::{HostSpec, Hub};
+use wasit_diag::Ident;
 
 use super::auth::Prompts;
 use super::fleet::Fleet;
 use super::provision::{Entries, Learned};
 use super::transport::{bootstrap_argv, RemoteShell};
+use crate::diag::{self, emit};
 use crate::util::now_ms;
+
+/// A host entry changed: recorded by its id and the shape of its kind, never its target.
+fn changed(entry: &HostEntry, op: HostChange) {
+    let shape = HostShape::of(&entry.kind);
+    emit(MarsadEvent::HostsChanged {
+        host: Ident::new(entry.id.as_str()),
+        op,
+        kind: shape.kind,
+        target_kind: shape.target,
+        port_set: shape.port_set,
+        identity_set: shape.identity_set,
+        options: shape.options,
+    });
+}
+
+fn failed(host: Option<&HostId>, op: HostsOp, e: &MarsadError) {
+    emit(MarsadEvent::HostsFailed {
+        host: host.map(|h| Ident::new(h.as_str())),
+        op,
+        // A store's or a link's error may quote what the user typed (a target, a path).
+        error: diag::foreign("hosts", &e.to_string()),
+    });
+}
 
 /// See the module docs. Cheap to clone.
 #[derive(Clone)]
@@ -78,14 +104,15 @@ impl Registry {
             .await;
         for h in r.inner.store.hosts().await? {
             if let Err(e) = r.link(h.clone()).await {
-                tracing::error!(host = %h.id, error = %e, "cannot start the link");
+                failed(Some(&h.id), HostsOp::StartLink, &e);
             }
         }
         let r2 = r.clone();
         tokio::spawn(async move {
             while let Some(l) = learned.recv().await {
+                let host = l.host().clone();
                 if let Err(e) = r2.learned(l).await {
-                    tracing::error!(error = %e, "cannot record what a connect attempt learned");
+                    failed(Some(&host), HostsOp::Learn, &e);
                 }
             }
         });
@@ -227,6 +254,7 @@ impl Registry {
         entry.derive_local_files();
         self.inner.store.put_host(entry.clone()).await?;
         self.link(entry.clone()).await?;
+        changed(&entry, HostChange::Added);
         Ok(entry)
     }
 
@@ -276,6 +304,7 @@ impl Registry {
                 .host_upserted(entry.clone(), FleetLink::Remote { state })
                 .await;
         }
+        changed(&entry, HostChange::Updated);
         Ok(entry)
     }
 
@@ -283,6 +312,7 @@ impl Registry {
         if *id == self.inner.local.id {
             return Err(MarsadError::invalid("the local host cannot be removed"));
         }
+        let removed = self.get(id);
         self.inner.store.remove_host(id).await?;
         self.unlink(id).await;
         self.inner
@@ -291,6 +321,9 @@ impl Registry {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id);
         self.inner.fleet.host_removed(id.clone()).await;
+        if let Some(entry) = removed {
+            changed(&entry, HostChange::Removed);
+        }
         Ok(())
     }
 
@@ -308,25 +341,34 @@ impl Registry {
     }
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
-        let id = match &l {
-            Learned::Platform { host, .. }
-            | Learned::Interactive { host }
-            | Learned::Machine { host, .. } => host.clone(),
-        };
+        let id = l.host().clone();
         let Some(mut entry) = self.get(&id) else {
             return Ok(());
         };
-        match l {
-            Learned::Platform { platform, .. } => entry.platform = Some(platform),
-            Learned::Interactive { .. } => entry.interactive_auth = true,
+        let what = match l {
+            Learned::Platform { platform, .. } => {
+                entry.platform = Some(platform);
+                LearnedWord::Platform
+            }
+            Learned::Interactive { .. } => {
+                entry.interactive_auth = true;
+                LearnedWord::Interactive
+            }
             Learned::Machine { machine, .. } => {
                 if entry.machine.as_deref() == Some(machine.as_str()) {
                     return Ok(());
                 }
-                entry.machine = Some(machine)
+                entry.machine = Some(machine);
+                LearnedWord::Machine
             }
-        }
+        };
         self.inner.store.put_host(entry.clone()).await?;
+        // Recorded once stored, before the fleet is told: whoever sees the fleet's event can
+        // rely on the record.
+        emit(MarsadEvent::HostsLearned {
+            host: Ident::new(id.as_str()),
+            what,
+        });
         self.inner
             .entries
             .write()

@@ -19,11 +19,14 @@
 //! override: plain (no colour) `tracing` text on stderr and the default panic message. stderr
 //! of the daemon is `marsad-agent.log` (raw crash output; see `Layout::open_log`).
 //!
-//! **Free text.** The only `ErrorInfo::ours` call is in [`ours`] (pinned by
-//! `tests/diag_sites.rs`): callers pass the `Display` of Marsad's or Wasit's own error types
-//! (an OS reason, a path of Marsad's own files, a fixed message), never anything a session,
-//! a peer or a CLI wrote. Errors that might quote stored or journaled data (the Wasl node,
-//! the hub's store) go through [`foreign`] and keep only a code, a length and a fingerprint.
+//! **Free text.** The only `ErrorInfo::ours` call is in [`ours`] and the only `DiagText::new`
+//! calls are here too (all pinned by `tests/diag_sites.rs`): callers pass the `Display` of
+//! Marsad's or Wasit's own error types (an OS reason, a path of Marsad's own files, a fixed
+//! message), never anything a session, a peer or a CLI wrote. Errors that might quote stored
+//! or journaled data (the Wasl node, the hub's store) go through [`foreign`] and keep only a
+//! code, a length and a fingerprint. What a transport command printed (ssh and wsl stderr,
+//! a host's banner) is the one other text that is kept, bounded and scrubbed of every
+//! registered secret ([`transport`], [`shape`]).
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -32,7 +35,7 @@ use std::time::Instant;
 use marsad_proto::diag::MarsadEvent;
 use marsad_proto::layout::{DIAG_AUX, DIAG_DAEMON};
 use tracing_subscriber::prelude::*;
-use wasit_diag::{Code, ErrorInfo, Ident, Ms, RotateShared, SinkConfig};
+use wasit_diag::{Code, DiagText, ErrorInfo, Ident, Ms, Origin, RotateShared, SinkConfig};
 
 use crate::version;
 
@@ -219,4 +222,73 @@ pub fn ours(code: &'static str, e: &impl std::fmt::Display) -> ErrorInfo {
 /// a fingerprint are kept.
 pub fn foreign(code: &str, text: &str) -> ErrorInfo {
     ErrorInfo::foreign(Code::new(code), text)
+}
+
+/// What ssh, `wsl.exe` or a host's bootstrap printed (a stderr tail, the reason a connect failed
+/// as the user sees it): bounded and scrubbed of every registered secret and project path.
+/// The one text of a host or its transport that records keep; design §4.4. The one
+/// `DiagText::new(Origin::Transport, …)` call of this crate.
+pub fn transport(text: &str) -> DiagText {
+    DiagText::new(Origin::Transport, text)
+}
+
+/// A short look at what a host printed before its report (a banner): scrubbed first, then cut
+/// to [`SHAPE_CHARS`] characters, so a registered secret is never cut in half before it is
+/// masked.
+pub fn shape(text: &str) -> DiagText {
+    let scrubbed = transport(text);
+    let head: String = scrubbed.as_str().chars().take(SHAPE_CHARS).collect();
+    transport(&head)
+}
+
+/// Characters of a host's preamble that [`shape`] keeps.
+pub const SHAPE_CHARS: usize = 120;
+
+/// Why a startup step failed, twice: as the record's [`ErrorInfo`] and as the words `serve`
+/// prints on stderr (the daemon's `marsad-agent.log`) unless `MARSAD_LOG` is set. Both carry the
+/// same content-free information: the code, and the OS's reason or the path of Marsad's own
+/// files where the error is ours; for an error that may quote stored data only a length.
+pub struct Reason {
+    pub info: ErrorInfo,
+    words: String,
+}
+
+impl Reason {
+    /// An error of our own making (see [`ours`]).
+    pub fn ours(code: &'static str, e: &impl std::fmt::Display) -> Reason {
+        let text = DiagText::new(Origin::Own, &e.to_string());
+        Reason {
+            info: ours(code, e),
+            words: format!("{code}: {}", text.as_str()),
+        }
+    }
+
+    /// An I/O error while doing `what` (a fixed phrase, optionally naming one of Marsad's own
+    /// paths): its kind and OS error number, never the message.
+    pub fn io(what: impl std::fmt::Display, e: &std::io::Error) -> Reason {
+        let text = DiagText::new(Origin::Own, &what.to_string());
+        let os = e
+            .raw_os_error()
+            .map_or_else(String::new, |n| format!(", os error {n}"));
+        Reason {
+            info: io(e),
+            words: format!("{}: {:?}{os}", text.as_str(), e.kind()),
+        }
+    }
+
+    /// A text that may quote data (see [`foreign`]): the code and its length.
+    pub fn foreign(code: &str, text: &str) -> Reason {
+        Reason {
+            info: foreign(code, text),
+            words: format!(
+                "{code} (details withheld, {} characters; see the diagnostics file)",
+                text.chars().count()
+            ),
+        }
+    }
+
+    /// The words for stderr.
+    pub fn words(&self) -> &str {
+        &self.words
+    }
 }
