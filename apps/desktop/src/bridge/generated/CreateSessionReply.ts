@@ -3,7 +3,7 @@ import type { SessionId } from "./SessionId";
 import type { Unsupported } from "./Unsupported";
 
 /**
- * Result of `sessions.create`.
+ * Result of `sessions.create` (and of `sessions.fork`).
  */
 export type CreateSessionReply = { id: SessionId, 
 /**

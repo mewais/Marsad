@@ -3,4 +3,4 @@
 /**
  * How a process generation was started ([`SessionEventKind::Started`]).
  */
-export type StartResume = "fresh" | "continue" | "resume";
+export type StartResume = "fresh" | "continue" | "resume" | "fork";

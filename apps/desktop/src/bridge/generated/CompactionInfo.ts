@@ -2,5 +2,12 @@
 
 /**
  * Context-compaction metadata (claude `system/compact_boundary`).
+ *
+ * Every part is optional: a CLI reports only what it knows, and a driver that does not report a
+ * figure leaves it `None` rather than guessing `0`. Clients render the parts that are present.
  */
-export type CompactionInfo = { trigger: string, pre_tokens: number, post_tokens: number, cumulative_dropped_tokens: number, duration_ms: number, };
+export type CompactionInfo = { 
+/**
+ * What started the compaction (claude: `manual` or `auto`).
+ */
+trigger?: string | null, pre_tokens?: number | null, post_tokens?: number | null, cumulative_dropped_tokens?: number | null, duration_ms?: number | null, };

@@ -67,4 +67,18 @@ stop_task: boolean,
  * [`HistoryDelivery`]): clients can tell whether a resumed conversation can show what came
  * before it.
  */
-earlier_history: HistoryDelivery, };
+earlier_history: HistoryDelivery, 
+/**
+ * `ResumeMode::Fork(id)` starts a new conversation that copies the one `id` names, leaving
+ * that one unchanged.
+ */
+fork: boolean, 
+/**
+ * `Command::Compact` compacts the conversation's context.
+ */
+compact: boolean, 
+/**
+ * `Command::RunShell` runs a shell command in the session's working directory through the
+ * agent CLI's own shell (its output is reported as [`AgentEvent::LocalShell`]).
+ */
+run_shell: boolean, };

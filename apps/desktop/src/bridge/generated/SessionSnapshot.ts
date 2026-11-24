@@ -3,6 +3,7 @@ import type { DriverCapabilities } from "./DriverCapabilities";
 import type { DriverId } from "./DriverId";
 import type { EarlierHistory } from "./EarlierHistory";
 import type { ExitSummary } from "./ExitSummary";
+import type { ForkedFrom } from "./ForkedFrom";
 import type { ModelInfo } from "./ModelInfo";
 import type { ModelUsage } from "./ModelUsage";
 import type { NotContinuable } from "./NotContinuable";
@@ -108,4 +109,9 @@ loaded: boolean,
 /**
  * What the session knows of the conversation before it (see [`EarlierHistory`]).
  */
-earlier: EarlierHistory, };
+earlier: EarlierHistory, 
+/**
+ * The session this one forked from ([`ForkedFrom`]); `None` for a session that started its
+ * own conversation or resumed one.
+ */
+forked_from?: ForkedFrom | null, };

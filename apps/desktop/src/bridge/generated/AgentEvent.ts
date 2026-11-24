@@ -7,6 +7,7 @@ import type { GateReason } from "./GateReason";
 import type { GateRequest } from "./GateRequest";
 import type { InputDropReason } from "./InputDropReason";
 import type { InputId } from "./InputId";
+import type { LocalShellOrigin } from "./LocalShellOrigin";
 import type { McpServerInfo } from "./McpServerInfo";
 import type { ModelInfo } from "./ModelInfo";
 import type { ModelUsage } from "./ModelUsage";
@@ -95,11 +96,26 @@ was_interrupted: boolean,
  */
 num_turns: number, 
 /**
- * Cumulative session usage up to this turn, when the CLI reports it
- * (claude `result`, codex last `thread/tokenUsage/updated` total,
- * ACP prompt-result usage).
+ * Cumulative usage up to this turn, on the basis each CLI counts from (the basis is the
+ * same across restarts only where noted):
+ * - claude: the sums of `result.modelUsage` and `total_cost_usd`, counted from the start
+ *   of the CLI process (a resumed process starts again from zero).
+ * - codex: the thread's `total` of the last `thread/tokenUsage/updated`, counted over the
+ *   thread's whole life (a resumed thread keeps its earlier total). Codex reports no cost,
+ *   so `cost_usd` is `0.0`.
+ * - ACP: tokens summed over the prompt results of the CLI process (a prompt's own
+ *   `usage` is per prompt, not a running total); `cost_usd` is the session's cost as the
+ *   last `usage_update` reported it (cumulative for the session).
  */
 usage: Usage, 
+/**
+ * What this turn alone used: its own tokens and cost. `None` when the driver cannot
+ * tell (no usage in the turn's report, or a baseline it does not know, e.g. the turn
+ * after a resume it did not see the counters of). Never negative: a counter that goes
+ * backwards (a new process or thread) yields `None`, not a difference. Summed over the
+ * turns of one counter basis it equals that basis's `usage`.
+ */
+turn_usage?: Usage | null, 
 /**
  * Per-model breakdown (claude only).
  */
@@ -178,7 +194,11 @@ available_modes?: Array<SessionMode>,
 /**
  * `None` = current mode unchanged.
  */
-current_mode?: string | null, } | { "type": "models_updated", models: Array<ModelInfo>, current?: string | null, } | { "type": "model_changed", model: string, } | { "type": "slash_commands_updated", commands: Array<SlashCommandInfo>, } | { "type": "compaction", info: CompactionInfo, } | { "type": "rate_limit_notice", info: RateLimitInfo, } | { "type": "command_rejected", 
+current_mode?: string | null, } | { "type": "models_updated", models: Array<ModelInfo>, current?: string | null, } | { "type": "model_changed", model: string, } | { "type": "slash_commands_updated", commands: Array<SlashCommandInfo>, } | { "type": "compaction", info: CompactionInfo, } | { "type": "local_shell", command: string, cwd?: string | null, 
+/**
+ * `None` when the command did not exit normally (killed, or no code reported).
+ */
+exit_code?: number | null, output: string, output_truncated?: boolean, origin: LocalShellOrigin, } | { "type": "rate_limit_notice", info: RateLimitInfo, } | { "type": "command_rejected", 
 /**
  * Which command (`"set_model"`, `"set_mode"`, `"interrupt"`, …).
  */

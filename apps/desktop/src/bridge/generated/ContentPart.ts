@@ -12,4 +12,22 @@ alt?: string | null, } | { "type": "file", source: MediaSource, name?: string | 
 /**
  * The resource URI as the CLI gave it (`file:///…`, `https://…`), when it has one.
  */
-uri?: string | null, };
+uri?: string | null, } | { "type": "diff", 
+/**
+ * The file the edit changed, as the CLI named it.
+ */
+path: string, 
+/**
+ * The text the edit replaced; `None` when the file was created (or wholly rewritten
+ * without the old text being known).
+ */
+old_text?: string | null, 
+/**
+ * The text the edit put in place of `old_text` (the whole new content for a create).
+ */
+new_text: string, 
+/**
+ * The unified-diff hunks as the CLI gave them, when it gave a patch rather than the
+ * two texts. For such a part `old_text` / `new_text` are the hunks' old and new lines.
+ */
+hunk?: string | null, };
