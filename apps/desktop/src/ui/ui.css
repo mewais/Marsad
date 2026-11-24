@@ -150,6 +150,10 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .skel{display:block;height:12px;border-radius:4px;background:linear-gradient(90deg,var(--surface-2),var(--raised),var(--surface-2));background-size:200% 100%}
 @media (prefers-reduced-motion: no-preference){.skel{animation:skel 1.4s ease-in-out infinite}@keyframes skel{to{background-position:-200% 0}}}
 .vlist{overflow:auto;position:relative;min-height:0}
+.vlist [data-flash="a"]{animation:vlist-flash-a 1.6s ease-out}
+.vlist [data-flash="b"]{animation:vlist-flash-b 1.6s ease-out}
+@keyframes vlist-flash-a{from{background:var(--accent-bg)}to{background:transparent}}
+@keyframes vlist-flash-b{from{background:var(--accent-bg)}to{background:transparent}}
 .dlg-h h2{font-size:15px;font-weight:600}
 .toasts{position:fixed;z-index:40}
 .toast .x{align-self:start}

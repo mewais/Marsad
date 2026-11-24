@@ -1,11 +1,12 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { BACKGROUND_SPEC } from "../../src/bridge/fixture/background";
 import type { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import { SPECS } from "../../src/bridge/fixture/sessions";
 import { sessionPath } from "../../src/router";
 import { hold, quietBackend, renderApp, sessionByName } from "../helpers";
+import { layoutTranscript, reach } from "../transcriptLayout";
 
 /** The fixture's background scenario: a billing subagent and a test run still going, an invoice subagent that reported back. */
 const backgroundBackend = () => quietBackend({ specs: [...SPECS, BACKGROUND_SPEC] });
@@ -175,7 +176,8 @@ describe("Activity lists the subagents in the strip above the composer; selectin
   });
 
   it("is loaded with the daemon's scoped history, a page at a time, and 'Load earlier' pages within the scope", async () => {
-    const user = userEvent.setup();
+    // The transcript is a virtual list: give it a viewport for this test, so the rows near a scroll position are mounted.
+    onTestFinished(layoutTranscript());
     const backend = backgroundBackend();
     const s0 = sessionByName(backend, NAME);
     // The subagent speaks 70 more times: more than a page.
@@ -185,8 +187,9 @@ describe("Activity lists the subagents in the strip above the composer; selectin
     expect(screen.queryByText("Billing finding number 1.")).toBeNull();
     const histories = backend.requests.filter((r) => r.method === "session.history").map((r) => r.params as { scope?: { kind: string; call_id?: string }; before?: number });
     expect(histories.map((h) => h.scope)).toEqual(expect.arrayContaining([{ kind: "main" }, { kind: "subagent", call_id: "c-bill" }]));
-    await user.click(await screen.findByRole("button", { name: "Load earlier messages" }));
-    await screen.findByText(/The billing module has webhook handlers/);
+    // The control is the transcript's first entry: reaching the top of the list asks for the page, as the control does.
+    await reach(() => screen.queryByRole("button", { name: "Load earlier messages" }));
+    await reach(() => screen.queryByText(/The billing module has webhook handlers/));
     const earlier = backend.requests.filter((r) => r.method === "session.history").map((r) => r.params as { scope?: { kind: string; call_id?: string }; before?: number }).filter((h) => h.before !== undefined);
     expect(earlier.filter((h) => h.scope?.kind === "subagent" && h.scope.call_id === "c-bill")).toHaveLength(1);
     expect(earlier.some((h) => h.scope?.kind === "main")).toBe(true);

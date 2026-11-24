@@ -1,12 +1,20 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeDialogs } from "../../src/shell/dialogs";
 import { nothingToContinue, workingDirectoryRefusal } from "../../src/bridge/api";
 import type { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import { renderApp } from "../helpers";
+import { layoutTranscript, reach } from "../transcriptLayout";
 
 const MESSAGE = "there is no earlier conversation to continue in /home/dev/src/scratch";
+
+// The earlier conversation is shown in the transcript, which mounts the rows near its viewport: give it one.
+let unlayout: () => void;
+beforeEach(() => {
+  unlayout = layoutTranscript();
+});
+afterEach(() => unlayout());
 /** How the hub relays a host's refusal of a launch: wrapped as an `upstream` error, the host's code and message in `cause`. */
 const upstream = (code: string, message: string) => ({ code: "upstream", message: `sessions.create on x1: ${message}`, data: { marsad_error: "upstream", message: `sessions.create on x1: ${message}`, cause: { code, message, data: null } } });
 
@@ -86,7 +94,6 @@ describe("new session: Continue most recent in a folder with no conversation", (
     await user.click(within(dlg).getByRole("button", { name: "Continue an existing one" }));
     await user.click(within(dlg).getByRole("button", { name: /Continue session/ }));
     await within(dlg).findByTestId("ns-nothing");
-    console.log("DBG", [...dlg.querySelectorAll("[role=radio]")].map((x) => x.textContent + ":" + x.getAttribute("aria-checked") + (x.hasAttribute("disabled") ? "(dis)" : "")).join(" | "), "| cwd=", (within(dlg).getByLabelText("Project folder") as HTMLInputElement).value);
   const field = within(dlg).getByLabelText("Project folder");
     await user.clear(field);
     await user.type(field, "~/src/ledgerline");
@@ -99,9 +106,9 @@ describe("new session: Continue most recent in a folder with no conversation", (
     expect(backend.snapshot("x1", id).native_session_id).toBe("native-7");
     expect(backend.snapshot("x1", id).earlier.state.kind).not.toBe("none");
     // And the session it opened shows that conversation above its own.
-    const earlier = await screen.findByTestId("earlier-part");
-    expect((await within(earlier).findAllByText(/^Round \d+: /)).length).toBeGreaterThan(0);
+    await reach(() => screen.queryByTestId("earlier-part"));
+    expect(await reach(() => screen.queryAllByText(/^Round \d+: /).find((el) => el.closest('[data-part="earlier"]')) ?? null)).toBeInTheDocument();
     await waitFor(() => expect(backend.snapshot("x1", id).earlier.state).toEqual({ kind: "loaded", complete: true }));
-    expect(screen.getByTestId("earlier-divider")).toBeInTheDocument();
+    expect(await reach(() => screen.queryByTestId("earlier-divider"), 1)).toBeInTheDocument();
   });
 });
