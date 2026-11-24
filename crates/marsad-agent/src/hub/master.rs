@@ -304,14 +304,24 @@ impl Masters {
         };
         match run_local(argv).await {
             Ok(Ran { exit: Some(0), .. }) => (MasterState::Alive, None, Check::Alive),
-            // Nothing listens: the master was killed and left its socket.
-            Ok(Ran { stderr, .. }) if stderr.contains("Connection refused") => {
+            // Nothing listens: the master was killed and left its socket. Or the socket went away
+            // between the look above and ssh's connect: the master exited as it was checked, which
+            // is the same news (the connection ended). Both are `Absent`, so the end is recorded.
+            Ok(Ran { stderr, .. })
+                if stderr.contains("Connection refused")
+                    || stderr.contains("No such file or directory") =>
+            {
                 if let Err(e) = tokio::fs::remove_file(control).await {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         fs_failed(&entry.id, &e);
                     }
                 }
-                (MasterState::Stale, None, Check::Absent)
+                let state = if stderr.contains("Connection refused") {
+                    MasterState::Stale
+                } else {
+                    MasterState::Absent
+                };
+                (state, None, Check::Absent)
             }
             Ok(Ran { exit, stderr }) => {
                 let words = if stderr.is_empty() {

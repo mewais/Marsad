@@ -1070,6 +1070,21 @@ impl Rig {
         master_pid(&self.master()).expect("the shared connection is open")
     }
 
+    /// The current link state of this host from the fleet snapshot.
+    async fn link_state(&self) -> Option<LinkState> {
+        let mut snap = self.c.fleet(None);
+        match next(&mut snap).await.1 {
+            FleetEvent::Reset { hosts } => hosts
+                .into_iter()
+                .find(|h| h.host.id == self.id)
+                .and_then(|h| match h.link {
+                    FleetLink::Remote { state } => Some(state),
+                    FleetLink::Local => None,
+                }),
+            _ => None,
+        }
+    }
+
     /// Records of `ev` about the host made after `from` and before a record made now.
     async fn window(&mut self, from: usize) -> Vec<Value> {
         let m = self.marker().await;
@@ -1198,10 +1213,19 @@ async fn the_connection_ends(how: End) {
             kill_master(&r.master()).await;
         }
     }
-    let state = until_link(&mut r.fleet, "pp", |s| {
-        matches!(s, LinkState::AuthNeeded { .. })
-    })
-    .await;
+    let state = match r
+        .link_state()
+        .await
+        .filter(|s| matches!(s, LinkState::AuthNeeded { .. }))
+    {
+        Some(s) => s,
+        None => {
+            until_link(&mut r.fleet, "pp", |s| {
+                matches!(s, LinkState::AuthNeeded { .. })
+            })
+            .await
+        }
+    };
     let LinkState::AuthNeeded {
         detail,
         cause,
@@ -1501,33 +1525,47 @@ async fn signing_out_ends_the_connection_and_the_host_waits_and_is_not_retried()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
     use std::os::unix::fs::PermissionsExt;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let mut r = Rig::new().await;
 
-    // A proxy command that waits on `fifo` before connecting to the sshd: the sign-in attempt is
-    // in flight but has not reached the host yet.
-    let fifo = r.d.path().join("hold-fifo");
-    let _ = std::fs::remove_file(&fifo);
-    let st = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo");
-    assert!(st.success(), "mkfifo failed: {st:?}");
-    // Open both ends so the proxy's `cat` starts without blocking this task; closing it later
-    // delivers EOF.
-    let mut hold = tokio::fs::OpenOptions::new()
+    // A proxy command that waits on a gate before connecting to the sshd: the sign-in attempt is
+    // in flight but has not reached the host yet. Both FIFOs are opened by the test first, read
+    // and write, so neither open of the proxy can block and nothing written is lost: the proxy
+    // opens the gate itself, read and write, and says `ready` on the other FIFO once it has.
+    // Only then does the test release the gate. (Releasing before the proxy had opened the gate
+    // left the proxy waiting for a writer that was already gone: the sign-in then timed out.)
+    let gate = r.d.path().join("hold-fifo");
+    let ready = r.d.path().join("ready-fifo");
+    for fifo in [&gate, &ready] {
+        let _ = std::fs::remove_file(fifo);
+        let st = std::process::Command::new("mkfifo")
+            .arg(fifo)
+            .status()
+            .expect("mkfifo");
+        assert!(st.success(), "mkfifo failed: {st:?}");
+    }
+    let mut release = tokio::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&fifo)
+        .open(&gate)
         .await
-        .expect("open fifo");
+        .expect("open gate");
+    let mut ready_in = BufReader::new(
+        tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&ready)
+            .await
+            .expect("open ready"),
+    );
     let proxy = r.d.path().join("proxy.sh");
     std::fs::write(
         &proxy,
         format!(
-            "#!/bin/sh\ncat \"{}\"\nexec nc 127.0.0.1 {}\n",
-            fifo.display(),
+            "#!/bin/sh\nexec 3<>\"{}\"\necho ready > \"{}\"\nread _go <&3\nexec nc 127.0.0.1 {}\n",
+            gate.display(),
+            ready.display(),
             r.sshd.port
         ),
     )
@@ -1538,29 +1576,30 @@ async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
     let HostKind::Ssh { options, .. } = &mut kind else {
         unreachable!()
     };
-    options.push(format!(
-        "ProxyCommand={} {} {}",
-        proxy.display(),
-        fifo.display(),
-        r.sshd.port
-    ));
+    options.push(format!("ProxyCommand={}", proxy.display()));
     r.add(kind).await;
 
     // Wait until the sign-in attempt is running (so a sign-out does not prevent it from
-    // starting), then sign out while it is held in the proxy.
+    // starting) and its proxy is held at the gate, then sign out while it is held.
     let _ = r
         .tail
         .until("ssh sign-in started", |rec| {
             rec["ev"] == "ssh.signin_started" && about(rec, "pp")
         })
         .await;
+    let mut said = String::new();
+    tokio::time::timeout(T, ready_in.read_line(&mut said))
+        .await
+        .expect("the proxy is held at the gate")
+        .expect("the proxy's ready line");
+    assert_eq!(said, "ready\n");
     // While the sign-in is blocked, the user signs out.
     r.c.sign_out_host(&r.id).await.unwrap();
     let from = r.marker().await;
 
     // Release the proxy and let the in-flight ssh finish.
-    hold.write_all(b"go\n").await.unwrap();
-    drop(hold);
+    release.write_all(b"go\n").await.unwrap();
+    drop(release);
 
     let state = until_link(&mut r.fleet, "pp", |s| {
         matches!(s, LinkState::AuthNeeded { .. })
