@@ -326,14 +326,12 @@ impl Rig {
             .expect("the host is in the fleet")
     }
 
-    /// Wait until the host's state satisfies `done`: already (in the snapshot), or by the next
-    /// event `event` accepts. The stream was subscribed before, so nothing since is missed.
-    async fn settle(
-        &self,
-        events: &mut EventStream,
-        done: impl Fn(&FleetHost) -> bool,
-        event: impl Fn(&FleetEvent) -> bool,
-    ) {
+    /// Wait until the host's state satisfies `done`: already, or by the next event `event`
+    /// accepts. The subscription is made here, at the start of the wait, so it begins from the
+    /// fleet's current state: an event from before this call (already reflected in the state, or
+    /// awaited by an earlier call) is never taken for the one this call waits for.
+    async fn settle(&self, done: impl Fn(&FleetHost) -> bool, event: impl Fn(&FleetEvent) -> bool) {
+        let mut events = self.fleet.subscribe(None).await.expect("the fleet topic");
         if done(&self.host().await) {
             return;
         }
@@ -387,20 +385,14 @@ async fn workstreams_store() -> (TempDir, Store) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_host_feed_is_live_again_with_a_snapshot_after_its_link_drops() {
     let rig = Rig::start(Daemon::new(&[])).await;
-    let mut events = rig.fleet.subscribe(None).await.expect("the fleet topic");
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
-    rig.settle(&mut events, |h| h.sessions_live, sessions_event)
-        .await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
+    rig.settle(|h| h.sessions_live, sessions_event).await;
 
     rig.drop_link();
-    rig.settle(&mut events, |h| !link_up(h), |e| link_event(e, false))
-        .await;
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
     // The resubscribe starts with a snapshot: the host's sessions are live again.
-    rig.settle(&mut events, |h| h.sessions_live, sessions_event)
-        .await;
+    rig.settle(|h| h.sessions_live, sessions_event).await;
 
     let host = rig.host().await;
     assert!(host.sessions_live, "the host is live after the reconnect");
@@ -410,9 +402,7 @@ async fn a_host_feed_is_live_again_with_a_snapshot_after_its_link_drops() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_host_feed_is_shown_and_recovered_on_reconnect() {
     let rig = Rig::start(Daemon::new(&[rt_topics::HOST_SESSIONS])).await;
-    let mut events = rig.fleet.subscribe(None).await.expect("the fleet topic");
     rig.settle(
-        &mut events,
         |h| h.feed_error.is_some(),
         |e| feed_error_event(e).is_some_and(|e| e.is_some()),
     )
@@ -425,12 +415,9 @@ async fn a_refused_host_feed_is_shown_and_recovered_on_reconnect() {
     // The host serves the topic now; its link drops and comes back.
     rig.daemon.refused.lock().unwrap().clear();
     rig.drop_link();
-    rig.settle(&mut events, |h| !link_up(h), |e| link_event(e, false))
-        .await;
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
     rig.settle(
-        &mut events,
         |h| h.feed_error.is_none(),
         |e| feed_error_event(e) == Some(None),
     )
@@ -449,17 +436,14 @@ async fn no_wasl_subscribe_is_attempted_while_the_host_is_disconnected() {
     let _ws = Workstreams::start(store, loopback, rig.fleet.clone(), HostId::new("hub"))
         .await
         .expect("the workstreams start");
-    let mut events = rig.fleet.subscribe(None).await.expect("the fleet topic");
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
     let wasl = format!("{HOST}:{WASL_TASKS}");
     counting.until(|s| s.contains(&wasl)).await;
 
     // The host goes away and stays away for now: nothing is asked of it.
     rig.daemon.online.store(false, Ordering::SeqCst);
     rig.drop_link();
-    rig.settle(&mut events, |h| !link_up(h), |e| link_event(e, false))
-        .await;
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
     let before = counting.count_host(HOST);
     let wasl_before = counting.count(&wasl);
     // The window in which a feed that still asks would ask again (the supervisor's own connection
@@ -474,8 +458,7 @@ async fn no_wasl_subscribe_is_attempted_while_the_host_is_disconnected() {
     // Back: the workstreams subscribe again.
     rig.daemon.online.store(true, Ordering::SeqCst);
     rig.hub.reconnect_now(&HostId::new(HOST));
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
     counting
         .until(|_| counting.count(&wasl) > wasl_before)
         .await;
@@ -497,12 +480,9 @@ async fn a_workstream_feed_refused_for_good_is_subscribed_again_on_reconnect() {
 
     // The service accepts the topic from now on; the link drops and comes back.
     rig.daemon.refused.lock().unwrap().clear();
-    let mut events = rig.fleet.subscribe(None).await.expect("the fleet topic");
     rig.drop_link();
-    rig.settle(&mut events, |h| !link_up(h), |e| link_event(e, false))
-        .await;
-    rig.settle(&mut events, link_up, |e| link_event(e, true))
-        .await;
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
 
     // The feed was not left dead: it subscribes again.
     counting
