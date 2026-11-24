@@ -6,6 +6,7 @@ import type { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import { SPECS } from "../../src/bridge/fixture/sessions";
 import { dayTime } from "../../src/lib/format";
 import { quietBackend, renderApp, sessionByName } from "../helpers";
+import { holdHistory } from "../historyGate";
 
 const COMPLETE = "resumed-invoice-rounding";
 const LOADING = "resumed-stripe-webhook";
@@ -219,25 +220,41 @@ describe("Load earlier messages: one control, up through the session and on into
   it("pages the session's own events first (the earlier conversation does not appear above a gap), then the earlier conversation", async () => {
     const user = userEvent.setup();
     const b = backend([LONG]);
+    // The first page passes at once; every later page is held until the test releases it.
+    const gate = holdHistory(b, 1);
     await open(b, LONG.name);
     const load = () => screen.getByRole("button", { name: "Load earlier messages" });
     await waitFor(() => expect(load()).toBeInTheDocument());
-    expect(screen.queryByTestId("earlier-divider")).toBeNull();
-    for (let i = 0; i < 12 && !screen.queryByTestId("earlier-divider"); i++) {
-      await user.click(load());
-      await waitFor(() => expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null || !screen.getByRole("button", { name: "Load earlier messages" }).hasAttribute("disabled")).toBe(true));
+    const asked = () => [...gate.answered().map((a) => a.params), ...gate.pending()];
+    const divider = () => screen.queryByTestId("earlier-divider");
+    for (;;) {
+      await waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const next = gate.pending()[0];
+      if (next.earlier) break;
+      // The session's own events are not all paged in yet: no divider, and the earlier conversation is not asked for.
+      expect(divider()).toBeNull();
+      expect(asked().some((p) => p.earlier)).toBe(false);
+      await gate.release();
+      await waitFor(() => expect(gate.pending()[0]).not.toBe(next));
     }
+    // The session's own events reached the start: only now is the earlier conversation asked for (the divider was absent at every own page above).
+    expect(gate.pending()[0].earlier).toBe(true);
+    await gate.release();
+    await waitFor(() => expect(divider()).toBeInTheDocument());
+    const order = asked().map((p) => (p.earlier ? "earlier" : "live"));
+    expect(order[order.length - 1]).toBe("earlier");
+    expect(order.slice(0, -1).every((k) => k === "live")).toBe(true);
+    await gate.open();
     const earlier = await part();
     await within(earlier).findByText(/The invoice totals are off by a cent/);
-    // The control goes on up through the earlier conversation.
+    // Manual paging still steps through older history within the earlier conversation.
     const oldest = () => rows(earlier)[0].textContent;
     const was = oldest();
     await user.click(load());
     await waitFor(() => expect(oldest()).not.toBe(was));
-    // Until the earlier conversation is all here: then there is no control.
     for (let i = 0; i < 6 && screen.queryByRole("button", { name: "Load earlier messages" }); i++) {
       await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
-      await waitFor(() => expect(b.requests.filter((r) => r.method === "session.history").length).toBeGreaterThan(0));
+      await waitFor(() => expect(b.requests.filter((r) => r.method === "session.history" && (r.params as { before?: number }).before !== undefined).length).toBeGreaterThan(0));
     }
     await waitFor(() => expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull());
     expect(within(earlier).getAllByText(/^Round 1: please look at module 0/).length).toBe(1);

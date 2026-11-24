@@ -3,12 +3,32 @@ import { errorMessage } from "../bridge/api";
 import type { SessionEvent, SessionKey } from "../bridge/wire";
 import { splitKey } from "../bridge/wire";
 import type { Feeds } from "./feeds";
-import type { AppStore, EventList, TranscriptSlice } from "./model";
+import { hasOlder, type AppStore, type EventList, type TranscriptSlice } from "./model";
 import { admits, MAIN, scopeKey, type TranscriptScope } from "./scope";
 
 const PAGE = 60;
+/** The first page of a session opened at its snapshot: read beside the subscription, so it is small in bytes as well as events. */
+const OPEN_PAGE = 60;
+const OPEN_BYTES = 256 * 1024;
+/** Every later page of the session's own events (background or requested): big in events, bounded in bytes. */
+const LATER_PAGE = 500;
+const LATER_BYTES = 1024 * 1024;
+/**
+ * Events kept resident in a session's own transcript. The background pager stops once it holds this many; live appends trim the
+ * oldest back to it once the list exceeds it by `TRIM_SLACK`, unless the reader has paged up (`extended`). Releasing the transcript
+ * keeps only the newest `RELEASE_KEEP`; what is trimmed is paged back in from the host when it is asked for.
+ */
+export const RESIDENT = 4000;
+export const TRIM_SLACK = 1000;
+export const RELEASE_KEEP = 200;
 
 const lastCursor = (events: readonly SessionEvent[]): number => events[events.length - 1]?.cursor ?? -1;
+
+/** Events in cursor order, each cursor once: a page and what arrived beside it. */
+function mergeByCursor(...lists: readonly SessionEvent[][]): SessionEvent[] {
+  const all = lists.flat().sort((a, b) => a.cursor - b.cursor);
+  return all.filter((e, i) => i === 0 || e.cursor !== all[i - 1].cursor);
+}
 
 /**
  * Per-session transcripts are loaded lazily when a session view opens: the latest page of history,
@@ -34,6 +54,10 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
     last: number;
     /** Resolves when the subscription is running (true), or when it will not (false). Scoped history is read after it. */
     started: Promise<boolean>;
+    /** Opened at a snapshot's cursor: the live events that arrive before the first page does, held to be merged with it. Null once it is in. */
+    held: SessionEvent[] | null;
+    /** Opened at a snapshot's cursor: the first page reads before this cursor (the subscription delivers from it on). Null when opened sequentially. */
+    before: number | null;
   }
   /** A subagent's transcript that is open. `pending`: its history is being fetched, live events wait here. `failed`: it could not be loaded. */
   interface Sub {
@@ -70,7 +94,14 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
     store.set((s) => {
       const cur = s.transcripts[tk];
       if (!cur || ev.cursor <= lastCursor(cur.events)) return s;
-      return { ...s, transcripts: { ...s.transcripts, [tk]: { ...cur, events: [...cur.events, ev] } } };
+      let events = [...cur.events, ev];
+      let hasMore = cur.hasMore;
+      // Bounded while live: what is trimmed is older than the resident window, and the host still has it (`hasMore`).
+      if (!cur.extended && events.length > RESIDENT + TRIM_SLACK) {
+        events = events.slice(events.length - RESIDENT);
+        hasMore = true;
+      }
+      return { ...s, transcripts: { ...s.transcripts, [tk]: { ...cur, events, hasMore } } };
     });
 
   /** The latest page of `scope`'s history; the cursor it ends at, or null when it failed. */
@@ -90,7 +121,10 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
   /** One event of the session's subscription: to the transcripts it belongs to. */
   function deliver(key: SessionKey, feed: Feed, ev: SessionEvent) {
     feed.last = Math.max(feed.last, ev.cursor);
-    if (admits(MAIN, ev)) append(key, ev);
+    if (admits(MAIN, ev)) {
+      if (feed.held) feed.held.push(ev);
+      else append(key, ev);
+    }
     for (const [tk, sub] of subs) {
       if (sub.key !== key || !admits(sub.scope, ev)) continue;
       if (sub.pending) sub.pending.push(ev);
@@ -191,6 +225,69 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
     if (--e.n <= 0) {
       e.off();
       live.delete(key);
+      // Closed: the resident window shrinks to the newest few; the rest is paged back in from the host if it is asked for.
+      store.set((s) => {
+        const t = s.transcripts[key];
+        if (!t) return s;
+        const trim = t.events.length > RELEASE_KEEP;
+        if (!trim && !t.extended) return s;
+        const events = trim ? t.events.slice(t.events.length - RELEASE_KEEP) : t.events;
+        return { ...s, transcripts: { ...s.transcripts, [key]: { ...t, events, hasMore: t.hasMore || trim, extended: false } } };
+      });
+    }
+  }
+
+  /** Start the session's subscription from `entry.last`; restarted from wherever it has got to if it ends. */
+  function subscribe(key: SessionKey, entry: Feed) {
+    const { host, id } = splitKey(key);
+    // Its host's: started again when that host's link comes back, not only when the hub's does.
+    entry.off = feeds.open(`events:${key}`, (onEnd) => api.subscribe.sessionEvents(host, id, entry.last, (e) => deliver(key, entry, e), onEnd), host);
+  }
+
+  /**
+   * The newest page of a session opened at its snapshot's cursor `c`, read beside the subscription (which was started from `c`, so it
+   * delivers what is after it). Live events that arrive before the page does are held, and merged with it by cursor when it arrives.
+   * A failed page leaves live events flowing and `hasMore` set, so "Load earlier" is the retry.
+   */
+  async function openLatest(key: SessionKey, entry: Feed, c: number) {
+    const { host, id } = splitKey(key);
+    patch(key, { loading: true, error: undefined });
+    try {
+      const page = await api.history(host, { id, before: c + 1, limit: OPEN_PAGE, scope: MAIN, max_bytes: OPEN_BYTES });
+      settleOpen(key, entry, { events: page.events, hasMore: page.has_more });
+    } catch (e) {
+      settleOpen(key, entry, { hasMore: true, error: errorMessage(e) });
+      return;
+    }
+    if (live.get(key) === entry) await pageInBackground(key, entry);
+    if (live.get(key) === entry) void reconcile(key, key, MAIN);
+  }
+
+  /** Put the first page in with the live events held meanwhile; from here on live events are appended as they come. */
+  function settleOpen(key: SessionKey, entry: Feed, page: { events?: SessionEvent[]; hasMore: boolean; error?: string }) {
+    const held = entry.held ?? [];
+    entry.held = null;
+    store.set((s) => {
+      const cur = s.transcripts[key];
+      if (!cur) return s;
+      const events = mergeByCursor(page.events ?? [], held);
+      return { ...s, transcripts: { ...s.transcripts, [key]: { ...cur, events, hasMore: page.hasMore, loading: false, error: page.error } } };
+    });
+  }
+
+  /**
+   * After the first page: older pages of the session's own events, one request at a time, while the host has more and fewer than
+   * `RESIDENT` are held. It stops at the first failure (which is left for the reader to retry) and when the feed is closed.
+   */
+  async function pageInBackground(key: SessionKey, entry: Feed) {
+    for (;;) {
+      const before = store.get().transcripts[key];
+      if (live.get(key) !== entry || !before || !before.hasMore || before.error || before.events.length >= RESIDENT) return;
+      // The last page is sized to the room left, so the list lands on RESIDENT exactly rather than a page past it.
+      await pageEarlier(key, MAIN, Math.min(LATER_PAGE, RESIDENT - before.events.length));
+      const after = store.get().transcripts[key];
+      // No progress (nothing came, or the page failed): stop rather than ask again.
+      if (!after || after.error || after.events[0]?.cursor === before.events[0]?.cursor) return;
     }
   }
 
@@ -201,17 +298,27 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
       return () => releaseFeed(key);
     }
     let started!: (ok: boolean) => void;
-    const entry: Feed = { n: 1, off: () => undefined, last: 0, started: new Promise<boolean>((r) => (started = r)) };
+    const entry: Feed = { n: 1, off: () => undefined, last: 0, started: new Promise<boolean>((r) => (started = r)), held: null, before: null };
     live.set(key, entry);
-    const { host, id } = splitKey(key);
+    const snapshot = store.get().sessions[key];
     const existing = store.get().transcripts[key];
+    // Snapshot loaded and nothing held: subscribe from its cursor now, and read the newest page beside it (no waiting in between).
+    if (snapshot && !existing?.events.length) {
+      const c = snapshot.cursor;
+      entry.last = c;
+      entry.held = [];
+      entry.before = c + 1;
+      subscribe(key, entry);
+      started(true);
+      void openLatest(key, entry, c);
+      return () => releaseFeed(key);
+    }
+    // Otherwise sequential: the latest page, then the subscription from its last cursor.
     void (async () => {
       const from = existing?.events.length ? lastCursor(existing.events) : await load(key, MAIN);
       if (from == null || live.get(key) !== entry) return started(false);
       entry.last = from;
-      // Started again (if it ends) from wherever the subscription has got to.
-      // Its host's: started again when that host's link comes back, not only when the hub's does.
-      entry.off = feeds.open(`events:${key}`, (onEnd) => api.subscribe.sessionEvents(host, id, entry.last, (e) => deliver(key, entry, e), onEnd), host);
+      subscribe(key, entry);
       started(true);
       void reconcile(key, key, MAIN);
     })();
@@ -267,6 +374,45 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
     });
   }
 
+  /**
+   * One step up the transcript: the page before the oldest event held, from the session's own events (`limit` events, `LATER_PAGE` by default); then,
+   * once those are all here, the earlier history. Resolves when the step is in the store (or failed: see `error`).
+   */
+  function pageEarlier(key: SessionKey, scope: TranscriptScope, limit = LATER_PAGE): Promise<void> {
+    const tk = scopeKey(key, scope);
+    const pending = paging.get(tk);
+    if (pending) return pending;
+    const { host, id } = splitKey(key);
+    const cur = store.get().transcripts[tk];
+    if (!cur || cur.loading) return Promise.resolve();
+    // Where the first page reads before, while no event is held (a failed first page): the subscription delivers from there on.
+    const bound = cur.events.length ? cur.events[0].cursor : scope.kind === "main" ? (live.get(key)?.before ?? null) : null;
+    let p: Promise<void>;
+    if (cur.hasMore && bound !== null) {
+      patch(tk, { loading: true, error: undefined });
+      p = (async () => {
+        try {
+          const page = await api.history(host, { id, before: bound, limit, scope, max_bytes: LATER_BYTES });
+          store.set((s) => {
+            const t = s.transcripts[tk];
+            // A subagent's transcript that was closed meanwhile is gone.
+            if (!t) return s;
+            return { ...s, transcripts: { ...s.transcripts, [tk]: { ...t, events: mergeByCursor(page.events, t.events), hasMore: page.has_more, loading: false } } };
+          });
+        } catch (e) {
+          if (store.get().transcripts[tk]) patch(tk, { loading: false, error: errorMessage(e) });
+        }
+        // The session's own events are all here now: what comes next is the earlier history.
+        await reconcile(tk, key, scope);
+      })();
+    } else if (cur.earlier.hasMore) p = serial(tk, () => pageOlder(tk, key, scope));
+    else if (cur.earlier.error) p = reconcile(tk, key, scope, true);
+    else return Promise.resolve();
+    paging.set(tk, p);
+    void p.then(() => paging.delete(tk));
+    return p;
+  }
+
   return {
     /** Ref-counted: returns a release function. The session's own transcript, or with `scope` a subagent's (which keeps the session's subscription open too). */
     open(key: SessionKey, scope: TranscriptScope = MAIN): () => void {
@@ -280,38 +426,13 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
     /**
      * Fetch the page before the oldest event shown, resolving when it is in the store (or failed: see `error`). One control, one
      * direction: up through the session's own events, then on into the conversation's earlier history, then up through that.
+     * The reader's paging is kept resident: live appends do not trim what the reader has paged up to (see `extended`).
      */
     loadEarlier(key: SessionKey, scope: TranscriptScope = MAIN): Promise<void> {
       const tk = scopeKey(key, scope);
-      const pending = paging.get(tk);
-      if (pending) return pending;
-      const { host, id } = splitKey(key);
       const cur = store.get().transcripts[tk];
-      if (!cur || cur.loading) return Promise.resolve();
-      let p: Promise<void>;
-      if (cur.hasMore && cur.events.length) {
-        patch(tk, { loading: true });
-        p = (async () => {
-          try {
-            const page = await api.history(host, { id, before: cur.events[0].cursor, limit: PAGE, scope });
-            store.set((s) => {
-              const t = s.transcripts[tk];
-              // A subagent's transcript that was closed meanwhile is gone.
-              if (!t) return s;
-              return { ...s, transcripts: { ...s.transcripts, [tk]: { ...t, events: [...page.events, ...t.events], hasMore: page.has_more, loading: false } } };
-            });
-          } catch (e) {
-            if (store.get().transcripts[tk]) patch(tk, { loading: false, error: errorMessage(e) });
-          }
-          // The session's own events are all here now: what comes next is the earlier history.
-          await reconcile(tk, key, scope);
-        })();
-      } else if (cur.earlier.hasMore) p = serial(tk, () => pageOlder(tk, key, scope));
-      else if (cur.earlier.error) p = reconcile(tk, key, scope, true);
-      else return Promise.resolve();
-      paging.set(tk, p);
-      void p.then(() => paging.delete(tk));
-      return p;
+      if (cur && hasOlder(cur)) patch(tk, { extended: true });
+      return pageEarlier(key, scope);
     },
   };
 }

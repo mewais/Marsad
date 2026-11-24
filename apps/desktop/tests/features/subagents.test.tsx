@@ -188,8 +188,8 @@ describe("Activity lists the subagents in the strip above the composer; selectin
     await user.click(await screen.findByRole("button", { name: "Load earlier messages" }));
     await screen.findByText(/The billing module has webhook handlers/);
     const earlier = backend.requests.filter((r) => r.method === "session.history").map((r) => r.params as { scope?: { kind: string; call_id?: string }; before?: number }).filter((h) => h.before !== undefined);
-    expect(earlier).toHaveLength(1);
-    expect(earlier[0].scope).toEqual({ kind: "subagent", call_id: "c-bill" });
+    expect(earlier.filter((h) => h.scope?.kind === "subagent" && h.scope.call_id === "c-bill")).toHaveLength(1);
+    expect(earlier.some((h) => h.scope?.kind === "main")).toBe(true);
     void s;
   });
 });

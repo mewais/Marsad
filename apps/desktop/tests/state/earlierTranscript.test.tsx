@@ -6,6 +6,7 @@ import { SPECS } from "../../src/bridge/fixture/sessions";
 import type { HistoryRequest, SessionEvent } from "../../src/bridge/wire";
 import { admits, createApp, hasOlder, MAIN, scopeKey, subagentScope, type TranscriptSlice } from "../../src/state";
 import { quietBackend, sessionByName } from "../helpers";
+import { cursorsOf, holdHistory, journal } from "../historyGate";
 
 const COMPLETE = "resumed-invoice-rounding";
 const LOADING = "resumed-stripe-webhook";
@@ -72,26 +73,44 @@ describe("a resumed conversation's transcript in the store: two lists, never mer
     expect(hasOlder(t)).toBe(false);
   });
 
-  it("one control, one direction: through the session's own events first, then into the earlier history", async () => {
+  it("one control, one direction: no earlier event while the session is incomplete, checked at every page the pager is let through", async () => {
     const { app, s, backend } = await boot(LONG.name, [LONG]);
+    const own = cursorsOf(journal(backend, s.host, s.id), (e) => admits(MAIN, e));
+    // Every session.history is held: the test releases one page at a time and looks at the store in between.
+    const gate = holdHistory(backend);
     app.transcripts.open(s.key);
-    await waitFor(() => expect(slice(app, s.key)?.loading).toBe(false));
-    expect(slice(app, s.key).hasMore).toBe(true);
-    // Nothing of the earlier history is asked for while the session's own events are not all here: it would sit above a gap.
-    expect(earlierAsks(backend)).toHaveLength(0);
-    expect(slice(app, s.key).earlier.events).toHaveLength(0);
-    while (slice(app, s.key).hasMore) {
-      expect(slice(app, s.key).earlier.events).toHaveLength(0);
-      await app.transcripts.loadEarlier(s.key);
+    const t = () => slice(app, s.key);
+    // What has been asked for so far, answered or held, in order.
+    const asked = () => [...gate.answered().map((a) => a.params), ...gate.pending()];
+    for (;;) {
+      await waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const next = gate.pending()[0];
+      if (next.earlier) break;
+      // The session's own events are not all here: nothing of the earlier history is asked for, held, or in the store.
+      expect(asked().some((p) => p.earlier)).toBe(false);
+      expect(t().earlier.events).toHaveLength(0);
+      if (t().events.length) {
+        // The held page reads just before the oldest event in the store, and the store holds exactly the newest of the session's events.
+        expect(next.before).toBe(t().events[0].cursor);
+        expect(t().events.map((e) => e.cursor)).toEqual(own.slice(own.length - t().events.length));
+        expect(t().hasMore).toBe(true);
+        expect(t().earlier.hasMore).toBe(false);
+      }
+      await gate.release();
     }
-    // The last session page brought the first earlier page with it (so a caller that waits for the page gets it).
-    expect(slice(app, s.key).earlier.events).toHaveLength(60);
-    const order = asks(backend).map((r) => (r.earlier ? "earlier" : "live"));
-    expect(order.indexOf("earlier")).toBeGreaterThan(order.lastIndexOf("live"));
-    // And on through the earlier list with the same call.
-    await app.transcripts.loadEarlier(s.key);
-    expect(slice(app, s.key).earlier.events.length).toBeGreaterThan(60);
-    expect(slice(app, s.key).events.some(isHistory)).toBe(false);
+    // Only when the session's own events are all in is the earlier list asked for.
+    expect(t().hasMore).toBe(false);
+    expect(t().events.map((e) => e.cursor)).toEqual(own);
+    expect(t().earlier.events).toHaveLength(0);
+    await gate.release();
+    await waitFor(() => expect(t().earlier.events).toHaveLength(60));
+    // Order of the asks: every session page first, then exactly one earlier page.
+    const order = asked().map((p) => (p.earlier ? "earlier" : "live"));
+    expect(order[order.length - 1]).toBe("earlier");
+    expect(order.slice(0, -1).every((k) => k === "live")).toBe(true);
+    expect(order.filter((k) => k === "earlier")).toHaveLength(1);
+    expect(t().events.some(isHistory)).toBe(false);
+    gate.open();
   });
 
   it("a session that began its conversation here has no earlier list and is never asked for one", async () => {

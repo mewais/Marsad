@@ -22,6 +22,11 @@ export interface EventList {
  */
 export interface TranscriptSlice extends EventList {
   earlier: EventList;
+  /**
+   * The reader has paged up into the session's own events: live appends keep what is held instead of trimming the oldest. Cleared when
+   * the transcript is released, which also trims it to its newest events.
+   */
+  extended?: boolean;
 }
 
 /** Older events exist above what a transcript shows: in the session's own events, or (once those are all here) in the earlier history. */

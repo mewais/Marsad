@@ -39,6 +39,48 @@ const traced = (trace?: string) => (trace ? { trace } : {});
 
 export const err = (code: string, message: string, data?: unknown): RpcError => ({ code, message, data: (data ?? null) as RpcError["data"] });
 
+/** The daemon's default page budget when a request names none (`HistoryRequest.max_bytes`): 1 MiB. */
+export const DEFAULT_PAGE_BYTES = 1024 * 1024;
+
+/**
+ * The last `limit` items of `all` that fit `maxBytes`, as the daemon pages them: from the newest back, a page stops once it has
+ * taken `maxBytes` (after at least one item), so it may exceed the budget by one item. Sizes are the item's JSON length, which is
+ * what the fixture stands for the journal's bytes by. `has_more`: items older than the page exist.
+ */
+export function tailPage<T>(all: readonly T[], limit: number, maxBytes?: number | null): { items: T[]; has_more: boolean } {
+  const budget = maxBytes ?? DEFAULT_PAGE_BYTES;
+  let bytes = 0;
+  let start = all.length;
+  while (start > 0 && all.length - start < limit) {
+    if (all.length - start >= 1 && bytes >= budget) break;
+    start -= 1;
+    bytes += sizeOf(all[start]);
+  }
+  return { items: all.slice(start), has_more: start > 0 };
+}
+
+/**
+ * The JSON length of an item, as a stand-in for its journal bytes. An item that cannot be serialised (a fixture that poisons one
+ * on purpose, to test the renderer) counts as empty: the daemon would have journaled it, and a page must still be served.
+ */
+function sizeOf(item: unknown): number {
+  try {
+    return JSON.stringify(item).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The snapshot of a session as the daemon serves it: its cursor covers every event published so far, so a subscription from it
+ * delivers only what comes after. `emit` keeps `snap.cursor` current, but events written to `events` directly (a scripted session)
+ * do not go through it; this keeps the snapshot from claiming less than the events it sits beside.
+ */
+export function snapshotOf(e: Entry): SessionSnapshot {
+  const last = e.events[e.events.length - 1]?.cursor;
+  return last != null && last > e.snap.cursor ? { ...e.snap, cursor: last } : e.snap;
+}
+
 export interface SimHooks {
   now(): number;
   /** Schedule after `ms` scaled by the fixture's speed. */

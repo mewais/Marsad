@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import type { HistoryPage, LaunchReply, SessionEvent } from "../../src/bridge/wire";
 import { quietBackend, renderApp, sessionByName } from "../helpers";
+import { holdHistory, type HistoryGate } from "../historyGate";
 
 type Ref = ReturnType<typeof sessionByName>;
 const send = (b: FixtureBackend, s: Ref, text: string) => b.request("session.command", { id: s.id, command: { command: "prompt", text } }, { host: s.host });
@@ -226,12 +227,13 @@ describe("session view: the first prompt and what became of each prompt", () => 
 });
 
 describe("composer: Up and Down recall earlier prompts", () => {
-  async function primed(count: number) {
+  async function primed(count: number, beforeOpen?: (b: FixtureBackend) => void) {
     const b = quietBackend();
     const s = sessionByName(b, "docs-search-index");
     const start = s.snap.turns_completed;
     for (let i = 1; i <= count; i++) await send(b, s, `q${i}`);
     await waitFor(() => expect(b.snapshot(s.host, s.id).turns_completed).toBe(start + count), { timeout: 5000 });
+    beforeOpen?.(b);
     return open("docs-search-index", b);
   }
 
@@ -304,16 +306,40 @@ describe("composer: Up and Down recall earlier prompts", () => {
 
   it("pages older prompts in when the user walks past the oldest loaded one, without blocking typing", async () => {
     const user = userEvent.setup();
-    const { box, backend } = await primed(14);
+    // The first page passes; the older page the walk needs is held (the pager is paused) until the test releases it.
+    let gate!: HistoryGate;
+    const { box } = await primed(14, (b) => (gate = holdHistory(b, 1)));
     await user.click(box);
-    const earlier = () => backend.requests.filter((r) => r.method === "session.history" && (r.params as { before?: number }).before !== undefined).length;
-    for (let i = 14; i >= 1; i--) {
+    await waitFor(() => expect(gate.answered()).toHaveLength(1));
+    const promptsIn = (events: SessionEvent[]) => events.filter((e) => e.kind === "input" && e.command.command === "prompt").length;
+    // The first page holds k of the 14 prompts: read from the page itself, so the walk must go past it.
+    const k = promptsIn(gate.answered()[0].page.events);
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThan(14);
+    // The older pages asked for: every history request after the open page (which also carries a `before` bound).
+    const olderAsked = () => [...gate.answered().map((a) => a.params), ...gate.pending()].slice(1).filter((p) => p.before !== undefined).length;
+    // The pager has asked for the older page and it is held: the walk is past the first page's prompts only once it is released.
+    await waitFor(() => expect(gate.pending()).toHaveLength(1));
+    expect(olderAsked()).toBe(1);
+    for (let i = 14; i >= 15 - k; i--) {
       await user.keyboard("{ArrowUp}");
       await waitFor(() => expect(box).toHaveValue(`q${i}`), { timeout: 3000 });
-      // The initial page holds fewer than 14 prompts, so the walk had to ask for older events.
-      if (i === 14) expect(earlier()).toBe(0);
     }
-    expect(earlier()).toBeGreaterThan(0);
+    // Past the oldest loaded prompt: the box keeps it and says it is loading the earlier ones; the walk asks for no further page.
+    await user.keyboard("{ArrowUp}");
+    expect(box).toHaveValue(`q${15 - k}`);
+    expect(screen.getByText("Loading earlier prompts…")).toBeInTheDocument();
+    expect(olderAsked()).toBe(1);
+    await gate.release();
+    // The walk that asked for the page shows the next older prompt once it arrives, without another key press.
+    await waitFor(() => expect(box).toHaveValue(`q${14 - k}`));
+    expect(screen.queryByText("Loading earlier prompts…")).toBeNull();
+    for (let i = 13 - k; i >= 1; i--) {
+      await user.keyboard("{ArrowUp}");
+      await waitFor(() => expect(box).toHaveValue(`q${i}`), { timeout: 3000 });
+    }
+    // That one older page reached the session's first event: nothing more was asked for.
+    expect(olderAsked()).toBe(1);
     // Past the oldest prompt of the whole session there is nothing more: the box keeps the oldest one.
     for (let i = 0; i < 40; i++) {
       await user.keyboard("{ArrowUp}");
@@ -325,15 +351,17 @@ describe("composer: Up and Down recall earlier prompts", () => {
 
   it("typing stays possible while older prompts are being fetched, and an edit cancels the walk", async () => {
     const user = userEvent.setup();
-    const { box, backend } = await primed(14);
-    // The real signal that a background load is over: the request for the older page settling.
+    // The real signal that a background load is over: the request for the older page settling. Installed before the view opens,
+    // since the background pager asks for older pages as soon as the session is open.
     const olderPages: Promise<unknown>[] = [];
-    const request = backend.request.bind(backend);
-    backend.request = (<T,>(method: string, params?: unknown, opts?: object) => {
-      const r = request<T>(method, params, opts);
-      if (method === "session.history" && (params as { before?: number }).before !== undefined) olderPages.push(r.then(() => undefined, () => undefined));
-      return r;
-    }) as typeof backend.request;
+    const { box } = await primed(14, (backend) => {
+      const request = backend.request.bind(backend);
+      backend.request = (<T,>(method: string, params?: unknown, opts?: object) => {
+        const r = request<T>(method, params, opts);
+        if (method === "session.history" && (params as { before?: number }).before !== undefined) olderPages.push(r.then(() => undefined, () => undefined));
+        return r;
+      }) as typeof backend.request;
+    });
     await user.click(box);
     for (let i = 14; i >= 1 && !olderPages.length; i--) await user.keyboard("{ArrowUp}");
     expect(olderPages.length).toBeGreaterThan(0);

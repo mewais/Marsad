@@ -1,12 +1,14 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createStore, shallowEqual, useStore } from "../../src/lib/store";
-import { AppProvider, createApp, renderCounts, selectGroups, NO_FILTERS, useSessionView, useRenderProbe } from "../../src/state";
+import { admits, AppProvider, createApp, MAIN, renderCounts, selectGroups, NO_FILTERS, useSessionView, useRenderProbe } from "../../src/state";
+import { RESIDENT } from "../../src/state/transcript";
 import { InboxRow } from "../../src/features/inbox/InboxRow";
 import { memoryHistory, RouterProvider } from "../../src/router";
 import { applyFleet, applyWorkstreams } from "../../src/state/controller";
 import type { FleetEvent, WorkstreamsEvent } from "../../src/bridge/wire";
 import { quietBackend, sessionByName } from "../helpers";
+import { cursorsOf, journal } from "../historyGate";
 
 async function boot() {
   localStorage.clear();
@@ -84,14 +86,59 @@ describe("session slices", () => {
     const { app, backend } = await boot();
     const s = sessionByName(backend, "upgrade-tauri-2-5");
     expect(app.store.get().transcripts[s.key]).toBeUndefined();
+    const own = cursorsOf(journal(backend, s.host, s.id), (e) => admits(MAIN, e));
+    const total = own.length;
+    const want = Math.min(total, RESIDENT);
     const release = app.transcripts.open(s.key);
-    await waitFor(() => expect(app.store.get().transcripts[s.key]?.events.length).toBe(60));
-    expect(app.store.get().transcripts[s.key].hasMore).toBe(true);
+    const t = () => app.store.get().transcripts[s.key];
+    await waitFor(() => expect(t()?.events.length).toBe(want));
+    await waitFor(() => expect(t()?.hasMore).toBe(total > RESIDENT));
+    expect(t().events.map((e) => e.cursor)).toEqual(own.slice(total - want));
+    // The first page is 60 events; each later page is 500 (both fit the byte budget for these events); the pager stops when the list is full.
+    const pages = backend.requests.filter((r) => r.method === "session.history" && !(r.params as { earlier?: boolean }).earlier);
+    expect(pages).toHaveLength(1 + Math.ceil(Math.max(0, want - 60) / 500));
+    // Nothing older is asked for while the session's own events are not all in: the earlier list stays empty.
+    expect(t().earlier.events).toHaveLength(0);
+    // With the session paged in, "load earlier" is a no-op for the session's own events (only the earlier list can grow).
+    const before = t().events.map((e) => e.cursor);
     await app.transcripts.loadEarlier(s.key);
-    expect(app.store.get().transcripts[s.key].events.length).toBeGreaterThan(60);
-    const n = app.store.get().transcripts[s.key].events.length;
+    expect(t().events.map((e) => e.cursor)).toEqual(before);
+    // A live event lands after the newest one, and the list follows it exactly.
     await backend.request("session.command", { id: s.id, command: { command: "prompt", text: "hi" } }, { host: s.host });
-    await waitFor(() => expect(app.store.get().transcripts[s.key].events.length).toBeGreaterThan(n));
+    const live = cursorsOf(journal(backend, s.host, s.id), (e) => admits(MAIN, e));
+    await waitFor(() => expect(t().events[t().events.length - 1].cursor).toBe(live[live.length - 1]));
+    expect(t().events.map((e) => e.cursor)).toEqual(live.slice(live.length - t().events.length));
+    release();
+    app.dispose();
+  });
+
+  it("the resident list is capped at RESIDENT: the pager stops at exactly that many, and 'load earlier' then adds one page", async () => {
+    // A session with more own events than the resident cap: pushed into the fixture before the app opens (its snapshot covers them).
+    localStorage.clear();
+    const backend = quietBackend();
+    const s = sessionByName(backend, "upgrade-tauri-2-5");
+    const events = journal(backend, s.host, s.id);
+    const last = events[events.length - 1].cursor;
+    const BULK = RESIDENT + 500;
+    for (let i = 1; i <= BULK; i++) events.push({ cursor: last + i, t: Date.now(), kind: "agent", event: { type: "assistant_delta", text: `bulk ${i}`, message_id: "m-bulk" } });
+    const app = createApp(backend);
+    await waitFor(() => expect(app.store.get().sessions[s.key]).toBeDefined());
+    const own = cursorsOf(events, (e) => admits(MAIN, e));
+    const total = own.length;
+    expect(total).toBeGreaterThan(RESIDENT);
+    const t = () => app.store.get().transcripts[s.key];
+    const release = app.transcripts.open(s.key);
+    await waitFor(() => expect(t()?.events.length).toBe(RESIDENT));
+    expect(t().hasMore).toBe(true);
+    expect(t().events.map((e) => e.cursor)).toEqual(own.slice(total - RESIDENT));
+    // The pager asked for exactly the pages that fill the cap: 60, then 500s, the last one sized to the room left.
+    const own_pages = backend.requests.filter((r) => r.method === "session.history" && !(r.params as { earlier?: boolean }).earlier);
+    expect(own_pages).toHaveLength(1 + Math.ceil((RESIDENT - 60) / 500));
+    expect(t().events.length).toBe(RESIDENT);
+    // "Load earlier" pages the next 500 of the session's own events, exactly.
+    await app.transcripts.loadEarlier(s.key);
+    expect(t().events.map((e) => e.cursor)).toEqual(own.slice(total - RESIDENT - 500));
+    expect(t().hasMore).toBe(true);
     release();
     app.dispose();
   });

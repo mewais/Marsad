@@ -20,7 +20,7 @@ import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
 import { FixturePtys } from "./pty";
 import { FixtureHostEnvs } from "./hostenv";
-import { err, SessionSim, type Entry } from "./runtime";
+import { err, SessionSim, snapshotOf, tailPage, type Entry } from "./runtime";
 import { FixtureFiles, MEDIA_SPEC } from "./media";
 import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
 import { SPAWN_REQUEST } from "./workstreams";
@@ -156,8 +156,8 @@ export class FixtureBackend implements Backend {
       answerAuth: (a) => this.answerAuth(a),
       cancelAuth: (a) => this.cancelAuth(a),
       createSession: (host, snap, first) => this.createSession(host, snap, first),
-      session: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap,
-      allSessions: () => [...this.hosts].flatMap(([host, h]) => [...h.sessions.values()].map((e) => ({ host, snap: e.snap }))),
+      session: (host, id) => { const e = this.hosts.get(host)?.sessions.get(id); return e && snapshotOf(e); },
+      allSessions: () => [...this.hosts].flatMap(([host, h]) => [...h.sessions.values()].map((e) => ({ host, snap: snapshotOf(e) }))),
       agentCommand: (host, driver) => this.envs.command(host, driver),
       emitWorkstreams: (e) => this.wsSubs.forEach((s) => s(e)),
     });
@@ -409,9 +409,9 @@ export class FixtureBackend implements Backend {
       case M.DIAG_SOURCES:
         return { now_ms: now + (this.hostClockSkew[hostId] ?? 0), boot: `host${hostId}01`, sources: [{ name: "daemon", gens: [] }] };
       case M.SESSIONS_LIST:
-        return { sessions: [...host.sessions.values()].map((e) => e.snap) };
+        return { sessions: [...host.sessions.values()].map((e) => snapshotOf(e)) };
       case M.SESSION_SNAPSHOT:
-        return this.entry(host, p as SessionRef).snap;
+        return snapshotOf(this.entry(host, p as SessionRef));
       case M.SESSION_HISTORY: {
         const r = p as HistoryRequest;
         // The daemon's filter: everything, the session's own transcript, or one subagent's; `before` and `has_more` are within the scope.
@@ -419,15 +419,15 @@ export class FixtureBackend implements Backend {
         // `earlier: true` pages the conversation's earlier history instead of the session's own events; the cursors of neither are comparable.
         const entry = this.entry(host, r);
         const all = (r.earlier ? entry.earlier ?? [] : entry.events).filter((e) => (r.before == null || e.cursor < r.before) && historyAdmits(scope, e));
-        const events = all.slice(Math.max(0, all.length - r.limit));
-        return { events, has_more: all.length > events.length };
+        const page = tailPage(all, r.limit, r.max_bytes);
+        return { events: page.items, has_more: page.has_more };
       }
       case M.SESSION_TRAIL_PAGE: {
         const r = p as TrailRequest;
         this.entry(host, r);
         const all = this.trail(host, r.id).filter((it) => r.before == null || it.cursor < r.before);
-        const entries = all.slice(Math.max(0, all.length - r.limit));
-        return { entries, has_more: all.length > entries.length };
+        const page = tailPage(all, r.limit, r.max_bytes);
+        return { entries: page.items, has_more: page.has_more };
       }
       case M.SESSION_ATTACHMENT_PUT: {
         const r = p as AttachmentPut;
@@ -619,7 +619,7 @@ export class FixtureBackend implements Backend {
   // ── fleet ─────────────────────────────────────────────────────────────────
 
   private fleetHost(h: HostRec): FleetHost {
-    return { host: h.def.entry, link: h.def.link ? { link: "remote", state: h.def.link } : { link: "local" }, sessions_live: this.isUp(h), sessions: [...h.sessions.values()].map((e) => e.snap), auth_prompt: h.prompt, git: this.gitSummaries(h) };
+    return { host: h.def.entry, link: h.def.link ? { link: "remote", state: h.def.link } : { link: "local" }, sessions_live: this.isUp(h), sessions: [...h.sessions.values()].map((e) => snapshotOf(e)), auth_prompt: h.prompt, git: this.gitSummaries(h) };
   }
 
   /** What the hub's background git refresh would publish: one summary per session folder. */
@@ -656,7 +656,7 @@ export class FixtureBackend implements Backend {
   }
 
   private publish(e: Entry) {
-    this.fleet({ kind: "session_upserted", host: e.host, session: e.snap });
+    this.fleet({ kind: "session_upserted", host: e.host, session: snapshotOf(e) });
     this.hub?.ws.onSession(e.host, e.snap.id);
   }
 
