@@ -70,29 +70,47 @@ describe("the main transcript is the session's own conversation", () => {
   });
 });
 
-describe("Activity lists the subagents; selecting one opens its transcript", () => {
+describe("Activity lists the subagents in the strip above the composer; selecting one opens its transcript", () => {
   it("lists them running first, then finished; each row says its state, tool calls and time", async () => {
+    const user = userEvent.setup();
     await open();
-    const list = await screen.findByTestId("side-subagents");
-    const rows = within(list).getAllByTestId("side-subagent");
+    const aside = screen.getByRole("complementary", { name: "Session details" });
+    // Subagents moved out of the sidebar; non-subagent background tasks stay in the sidebar.
+    expect(within(aside).queryByTestId("side-subagents")).toBeNull();
+    const tasks = within(aside).getByTestId("side-tasks");
+    expect(within(tasks).getAllByTestId("side-task")).toHaveLength(1);
+    expect(tasks).toHaveTextContent("pnpm test --run");
+    expect(tasks).toHaveTextContent("local_bash");
+
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("Subagents · 1 working · 1 finished");
+    expect(screen.queryByTestId("subagent-strip-list")).toBeNull();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // Defaults to Active when any subagents are running; switching to All shows running first, then finished.
+    const strip = screen.getByTestId("subagent-strip");
+    expect(within(strip).getByRole("button", { name: "Active" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(strip).getByRole("button", { name: "All" }));
+
+    const list = screen.getByTestId("subagent-strip-list");
+    const rows = within(list).getAllByTestId("subagent-strip-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent(/Explore.*Audit the billing routes/);
     expect(rows[0]).toHaveTextContent("Running");
     expect(rows[0]).toHaveTextContent("3 tool calls");
     expect(rows[1]).toHaveTextContent(/Explore.*Audit the invoice routes/);
     expect(rows[1]).toHaveTextContent("Finished");
-    // The shell command is a background task, not a subagent: it has its own list.
-    const tasks = screen.getByTestId("side-tasks");
-    expect(within(tasks).getAllByTestId("side-task")).toHaveLength(1);
-    expect(tasks).toHaveTextContent("pnpm test --run");
-    expect(tasks).toHaveTextContent("local_bash");
+    expect(rows[1]).toHaveTextContent("2 tool calls");
   });
 
   it("opens the subagent's own transcript at an address, read only and saying whose it is; Back returns to the session", async () => {
     const user = userEvent.setup();
     const { s, history } = await open();
-    const row = within(await screen.findByTestId("side-subagents")).getAllByTestId("side-subagent")[0];
-    await user.click(within(row).getByRole("link"));
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
+    const row = within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")[0];
+    await user.click(within(row).getByRole("link", { name: /Open transcript/ }));
     expect(history.store.get()).toBe(sessionPath(s.host, s.id, undefined, "c-bill"));
     expect(history.store.get()).toBe(`/session/${s.host}/${s.id}?sub=c-bill`);
     // Its conversation, not the session's.
@@ -105,7 +123,7 @@ describe("Activity lists the subagents; selecting one opens its transcript", () 
     expect(screen.getByTestId("subagent-bar")).toHaveTextContent("Subagent · Explore");
     expect(screen.getByTestId("subagent-bar")).toHaveTextContent("Running");
     // The row it was opened from is marked.
-    expect(within(await screen.findByTestId("side-subagents")).getAllByRole("link")[0]).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByTestId("subagent-strip-list")).getAllByRole("link")[0]).toHaveAttribute("aria-current", "page");
     await user.click(screen.getByTestId("subagent-back"));
     expect(history.store.get()).toBe(`/session/${s.host}/${s.id}`);
     expect(await screen.findByText(/All three are running/)).toBeInTheDocument();
@@ -273,18 +291,19 @@ describe("stopping work", () => {
     const user = userEvent.setup();
     const backend = backgroundBackend();
     const { s } = await open(backend);
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
     const h = hold(backend, "session.command");
-    // The card in the transcript and the row in the sidebar both stop it.
-    const side = () => within(screen.getByTestId("side-subagents"));
+    // The card in the transcript and the row in the strip both stop it.
+    const stripList = () => within(screen.getByTestId("subagent-strip-list"));
     expect(screen.getAllByRole("button", { name: "Stop subagent Audit the billing routes" })).toHaveLength(2);
-    await user.click(await side().findByRole("button", { name: "Stop subagent Audit the billing routes" }));
+    await user.click(await stripList().findByRole("button", { name: "Stop subagent Audit the billing routes" }));
     await waitFor(() => screen.getAllByRole("button", { name: "Stop subagent Audit the billing routes" }).forEach((b) => expect(b).toHaveAttribute("aria-busy", "true")));
     expect(snap(backend, s).subagents.find((x) => x.call_id === "c-bill")?.running).toBe(true); // nothing is shown that the daemon has not confirmed
     h.release();
     await waitFor(() => expect(snap(backend, s).subagents.find((x) => x.call_id === "c-bill")?.running).toBe(false));
     expect(commands(backend)).toEqual([{ command: "stop_task", task_id: "task-bill" }]);
-    // Finished work is listed newest first: the one just stopped leads.
-    await waitFor(() => expect(within(screen.getByTestId("side-subagents")).getAllByTestId("side-subagent")[0]).toHaveTextContent("Stopped"));
+    // Finished work is listed newest first: the one just stopped leads (default filter shifts to All when none are active).
+    await waitFor(() => expect(within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")[0]).toHaveTextContent("Stopped"));
     // The test run still goes: the session is working, with one task.
     expect(pill()).toHaveTextContent("Working in the background: 1 task");
     // A task that is not a subagent has its own.
@@ -309,14 +328,126 @@ describe("stopping work", () => {
   });
 
   it("an agent that cannot stop a task has no Stop buttons", async () => {
+    const user = userEvent.setup();
     const backend = backgroundBackend();
     const s = sessionByName(backend, NAME);
     backend.patchSession(s.host, s.id, { capabilities: { ...s.snap.capabilities, stop_task: false } });
     await open(backend);
-    await screen.findByTestId("side-subagents");
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
+    await screen.findByTestId("subagent-strip-list");
     expect(screen.queryByRole("button", { name: /^Stop / })).toBeNull();
     // Interrupt is still the session's.
     expect(screen.getByRole("button", { name: "Interrupt" })).toBeEnabled();
+  });
+});
+
+describe("the expandable subagent strip above the composer", () => {
+  it("is hidden completely when the session has no subagents", async () => {
+    await open(quietBackend(), "docs-search-index");
+    expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+    expect(screen.queryByTestId("subagent-strip")).toBeNull();
+    const aside = screen.getByRole("complementary", { name: "Session details" });
+    expect(within(aside).queryByTestId("side-subagents")).toBeNull();
+  });
+
+  it("shows working and finished counts, omitting zero counts as subagents finish", async () => {
+    const backend = backgroundBackend();
+    const { s } = await open(backend);
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(toggle).toHaveTextContent("Subagents · 1 working · 1 finished");
+    // End the only running subagent -> only finished count remains.
+    act(() => work(backend, s).endTask("task-bill", "completed", "Done."));
+    await waitFor(() => expect(toggle).toHaveTextContent("Subagents · 2 finished"));
+    expect(toggle).not.toHaveTextContent("working");
+  });
+
+  it("shows only the working count when all subagents are running, and shows an empty note for Finished", async () => {
+    const user = userEvent.setup();
+    const runningOnly = quietBackend();
+    const s2 = sessionByName(runningOnly, "docs-search-index");
+    runningOnly.patchSession(s2.host, s2.id, {
+      subagents: [{ call_id: "c-only", name: "Agent", subagent_type: "Explore", description: "Scan docs", started_at_ms: Date.now() - 5_000, running: true, tool_calls: 1 }],
+    });
+    await open(runningOnly, "docs-search-index");
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(toggle).toHaveTextContent("Subagents · 1 working");
+    expect(toggle).not.toHaveTextContent("finished");
+    await user.click(toggle);
+    const strip = screen.getByTestId("subagent-strip");
+    await user.click(within(strip).getByRole("button", { name: "Finished" }));
+    expect(screen.getByTestId("subagent-strip-empty")).toHaveTextContent("No finished subagents.");
+  });
+
+  it("expands and collapses via keyboard (Enter and Space) with aria-expanded and aria-controls", async () => {
+    const user = userEvent.setup();
+    await open();
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    toggle.focus();
+    expect(toggle).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const listId = toggle.getAttribute("aria-controls");
+    expect(listId).toBeTruthy();
+    expect(document.getElementById(listId!)).toBe(screen.getByTestId("subagent-strip-list"));
+    await user.keyboard(" ");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("subagent-strip-list")).toBeNull();
+  });
+
+  it("filters Active / Finished / All, defaulting to Active when any are active and All otherwise", async () => {
+    const user = userEvent.setup();
+    await open();
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
+    const strip = screen.getByTestId("subagent-strip");
+    const filterBtn = (name: string) => within(strip).getByRole("button", { name });
+
+    // Default Active (1 active, 1 finished).
+    expect(filterBtn("Active")).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")).toHaveLength(1);
+    expect(screen.getByTestId("subagent-strip-list")).toHaveTextContent("Audit the billing routes");
+
+    // Switch to Finished.
+    await user.click(filterBtn("Finished"));
+    expect(filterBtn("Finished")).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")).toHaveLength(1);
+    expect(screen.getByTestId("subagent-strip-list")).toHaveTextContent("Audit the invoice routes");
+
+    // Switch to All.
+    await user.click(filterBtn("All"));
+    expect(filterBtn("All")).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")).toHaveLength(2);
+  });
+
+  it("defaults to All when no subagents are active, and shows a plain empty note if Active is chosen", async () => {
+    const user = userEvent.setup();
+    await open(quietBackend(), "migrate-auth-middleware");
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
+    const strip = screen.getByTestId("subagent-strip");
+    expect(within(strip).getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByTestId("subagent-strip-list")).getAllByTestId("subagent-strip-row")).toHaveLength(1);
+
+    await user.click(within(strip).getByRole("button", { name: "Active" }));
+    expect(within(strip).getByRole("button", { name: "Active" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryAllByTestId("subagent-strip-row")).toHaveLength(0);
+    expect(screen.getByTestId("subagent-strip-empty")).toHaveTextContent("No active subagents.");
+  });
+
+  it("resets expand and filter state per session when switching sessions", async () => {
+    const user = userEvent.setup();
+    const backend = backgroundBackend();
+    const { history } = await open(backend);
+    await user.click(await screen.findByTestId("subagent-strip-toggle"));
+    await user.click(within(screen.getByTestId("subagent-strip")).getByRole("button", { name: "Finished" }));
+    expect(screen.getByTestId("subagent-strip-toggle")).toHaveAttribute("aria-expanded", "true");
+
+    const other = sessionByName(backend, "migrate-auth-middleware");
+    act(() => history.push(`/session/${other.host}/${other.id}`));
+    await screen.findByRole("heading", { name: "migrate-auth-middleware" });
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(within(screen.getByTestId("subagent-strip")).getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
   });
 });
 

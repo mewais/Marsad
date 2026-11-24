@@ -13,7 +13,8 @@ import { Composer } from "./Composer";
 import { MediaCtx } from "../media/Parts";
 import { SessionFacts } from "./SessionFacts";
 import { SessionWork } from "./SessionWork";
-import { SubagentView } from "./SubagentView";
+import { SubagentStrip, type SubagentFilter } from "./SubagentStrip";
+import { SubagentFoot, SubagentView } from "./SubagentView";
 import { TranscriptList } from "./TranscriptList";
 import { MAIN } from "../../state";
 import { usageSummary } from "./usage";
@@ -59,6 +60,8 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
   const api = useApi();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [subStripOpen, setSubStripOpen] = useState(false);
+  const [subStripFilter, setSubStripFilter] = useState<SubagentFilter | null>(null);
   const saveName = () => {
     const name = renaming?.trim() ?? "";
     setRenaming(null);
@@ -167,17 +170,26 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
               {sub ? (
                 <SubagentView sessionKey={key} host={host} id={id} callId={sub} snap={snap} driver={drv} />
               ) : (
-                <>
-                  <TranscriptList sessionKey={key} host={host} id={id} scope={MAIN} driver={drv} followKey={gates.length}>
-                    {gates.map((pg, i) => (
-                      <div key={pg.gate.request_id} id={`gate-${pg.gate.request_id}`}>
-                        <Gate view={v} pg={pg} density="full" active={i === 0} />
-                      </div>
-                    ))}
-                  </TranscriptList>
-                  <Composer sessionKey={key} snap={snap} />
-                </>
+                <TranscriptList sessionKey={key} host={host} id={id} scope={MAIN} driver={drv} followKey={gates.length}>
+                  {gates.map((pg, i) => (
+                    <div key={pg.gate.request_id} id={`gate-${pg.gate.request_id}`}>
+                      <Gate view={v} pg={pg} density="full" active={i === 0} />
+                    </div>
+                  ))}
+                </TranscriptList>
               )}
+              <SubagentStrip
+                sessionKey={key}
+                host={host}
+                id={id}
+                snap={snap}
+                selected={sub}
+                open={subStripOpen}
+                onOpenChange={setSubStripOpen}
+                filter={subStripFilter}
+                onFilterChange={setSubStripFilter}
+              />
+              {sub ? <SubagentFoot snap={snap} callId={sub} /> : <Composer sessionKey={key} snap={snap} />}
             </MediaCtx.Provider>
           </div>
           <aside className="side" aria-label="Session details">
@@ -207,7 +219,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
                 </div>
               </div>
             ) : null}
-            <SessionWork sessionKey={key} host={host} id={id} snap={snap} selected={sub} />
+            <SessionWork sessionKey={key} snap={snap} />
             <SessionFacts snap={snap} />
           </aside>
         </div>
