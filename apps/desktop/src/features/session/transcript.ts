@@ -14,12 +14,29 @@ export type NotSentCause = InputDropReason | Exclude<CommandStatus["status"], "s
  */
 export type Delivery = { state: "sent" } | { state: "queued" } | { state: "not_sent"; cause: NotSentCause; detail?: string };
 
-/** `at`: when the conversation says it happened (an item of the earlier history; a live item is shown without a time). */
-export type UserItem = { kind: "user"; key: string; input?: InputId; text: string; delivery: Delivery; attachments: Attachment[]; at?: number };
-export type ThinkingItem = { kind: "thinking"; key: string; text: string };
-export type ToolItem = { kind: "tool"; key: string; callId: string; name: string; input: unknown; subagent: boolean; done: boolean; ok?: boolean; result?: unknown; status?: string; parts: ContentPart[] };
+/**
+ * The cursor range an item was folded from: `from` is the first event that made it, `to` the latest one that changed it.
+ * A merge (a delta joining its message, a tool call's result) extends `to`; `from` never moves, so the key stays the first cursor.
+ */
+export interface Span {
+  from: number;
+  to: number;
+}
+
+/**
+ * `at`: when the item happened, in the clock of its list. A live item takes the time of its event; an item of the earlier history
+ * takes the time the conversation gives for it (none for a tool call, which the history does not time).
+ */
+export type UserItem = { kind: "user"; key: string; input?: InputId; text: string; delivery: Delivery; attachments: Attachment[]; at?: number; span: Span };
+export type ThinkingItem = { kind: "thinking"; key: string; text: string; span: Span };
+export type ToolItem = { kind: "tool"; key: string; callId: string; name: string; input: unknown; subagent: boolean; done: boolean; ok?: boolean; result?: unknown; status?: string; parts: ContentPart[]; at?: number; span: Span };
 /** `warn`: the agent or its provider says something to watch (a rate limit), not a failure. */
-export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "info" | "warn" | "err" };
+export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "info" | "warn" | "err"; span: Span };
+/**
+ * The end of one turn: how long it ran (from the turn's start to its end, when both were seen) and whether the user interrupted it.
+ * Nothing else about a turn (its tokens, its cost) is in the item yet: the footer shows only what is here.
+ */
+export type TurnItem = { kind: "turn"; key: string; duration?: number; interrupted: boolean; span: Span };
 
 /**
  * One folded transcript entry. Items are immutable: a change replaces the item with a new object,
@@ -27,12 +44,16 @@ export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "inf
  */
 export type Item =
   | UserItem
-  | { kind: "assistant"; key: string; text: string; at?: number }
+  | { kind: "assistant"; key: string; text: string; at?: number; span: Span }
   /** Non-text content: an image or file the agent showed, or one the CLI reported in a user message. */
-  | { kind: "media"; key: string; role: "assistant" | "user"; parts: ContentPart[] }
+  | { kind: "media"; key: string; role: "assistant" | "user"; parts: ContentPart[]; span: Span }
   | ThinkingItem
   | ToolItem
-  | NoticeItem;
+  | NoticeItem
+  | TurnItem;
+
+/** An item before the fold gives it its span: what the fold's helpers take. */
+type Body = Item extends infer I ? (I extends Item ? Omit<I, "span"> : never) : never;
 
 const SENT: Delivery = { state: "sent" };
 const QUEUED: Delivery = { state: "queued" };
@@ -81,6 +102,10 @@ interface State {
   /** The notice of the turn the agent started by itself, while that turn runs: its end may say why it ran. */
   selfTurn: number | undefined;
   lastMsg: string | undefined;
+  /** The start time of the turn that is running, from its turn_started (none when it was not seen). */
+  turnStart: number | undefined;
+  /** The cursor of the event being folded: what a new or changed item's span reaches to. */
+  cur: number;
   /** Events processed so far (a prefix of the events array). */
   count: number;
   dirty: boolean;
@@ -105,14 +130,16 @@ interface TaskFacts {
   background: boolean;
 }
 
-const blank = (scope: TranscriptScope, part: Part): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), tasks: new Map(), runs: new Map(), selfTurn: undefined, lastMsg: undefined, count: 0, dirty: false, scope, part });
+const blank = (scope: TranscriptScope, part: Part): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), tasks: new Map(), runs: new Map(), selfTurn: undefined, lastMsg: undefined, turnStart: undefined, cur: 0, count: 0, dirty: false, scope, part });
 
-const push = (st: State, item: Item) => {
-  st.items.push(item);
+/** A new item, folded from the event being processed. */
+const push = (st: State, item: Body) => {
+  st.items.push({ ...item, span: { from: st.cur, to: st.cur } } as Item);
   st.dirty = true;
 };
-const replace = (st: State, i: number, item: Item) => {
-  st.items[i] = item;
+/** The item at `i` changed by the event being processed: it keeps where it started and reaches to this event. */
+const replace = (st: State, i: number, item: Body | Item) => {
+  st.items[i] = { ...item, span: { from: st.items[i].span.from, to: st.cur } } as Item;
   st.dirty = true;
 };
 
@@ -143,14 +170,15 @@ function apply(st: State, e: SessionEvent) {
   if (!admits(st.scope, e)) return;
   const key = String(e.cursor);
   const items = st.items;
+  st.cur = e.cursor;
   // The earlier list holds history items only (agent events); the live list holds none of them.
   if (st.part === "earlier" && e.kind !== "agent") return;
   switch (e.kind) {
     case "input": {
       const c = e.command;
       const id = inputId(e.input);
-      if (c.command === "prompt") userItem(st, key, id, c.text, deliveryOf(e.status), c.attachments ?? NO_ATTACHMENTS);
-      else if (c.command === "run_slash") userItem(st, key, id, `/${c.name} ${c.args}`.trim(), deliveryOf(e.status), NO_ATTACHMENTS);
+      if (c.command === "prompt") userItem(st, key, id, c.text, deliveryOf(e.status), c.attachments ?? NO_ATTACHMENTS, e.t);
+      else if (c.command === "run_slash") userItem(st, key, id, `/${c.name} ${c.args}`.trim(), deliveryOf(e.status), NO_ATTACHMENTS, e.t);
       else if (id && COMMAND_WORD[c.command]) st.commands.set(id, COMMAND_WORD[c.command]!);
       st.lastMsg = undefined;
       return;
@@ -179,7 +207,8 @@ function apply(st: State, e: SessionEvent) {
   // An item of the earlier history is the event it holds, with the time the conversation gives for it.
   const history = e.event.type === "history";
   if (history !== (st.part === "earlier")) return;
-  const at = e.event.type === "history" ? e.event.at_ms ?? undefined : undefined;
+  // When the item happened: the history's own time for an item of the earlier history, the event's time for a live one.
+  const when = e.event.type === "history" ? e.event.at_ms ?? undefined : e.t;
   const inner = e.event.type === "history" ? e.event.event : e.event;
   // A subagent's own lines arrive wrapped in their scope: in its transcript they are the transcript.
   const a = inner.type === "scoped" ? inner.event : inner;
@@ -188,7 +217,7 @@ function apply(st: State, e: SessionEvent) {
     case "user_message":
       // Only ever inside an item of the earlier history: a prompt of this session is an `input` event.
       if (!history) return;
-      userItem(st, key, undefined, a.text, SENT, NO_ATTACHMENTS, at);
+      userItem(st, key, undefined, a.text, SENT, NO_ATTACHMENTS, when);
       st.lastMsg = undefined;
       return;
     case "assistant_delta":
@@ -196,13 +225,13 @@ function apply(st: State, e: SessionEvent) {
       const kind = a.type === "assistant_delta" ? "assistant" : "thinking";
       const prev = items[items.length - 1];
       if (prev && prev.kind === kind && (a.message_id === undefined || a.message_id === st.lastMsg)) replace(st, items.length - 1, { ...prev, text: prev.text + a.text });
-      else push(st, kind === "assistant" ? { kind, key, text: a.text, at } : { kind, key, text: a.text });
+      else push(st, kind === "assistant" ? { kind, key, text: a.text, at: when } : { kind, key, text: a.text });
       st.lastMsg = a.message_id ?? undefined;
       return;
     }
     case "tool_call_started":
       st.tools.set(a.call_id, items.length);
-      push(st, { kind: "tool", key, callId: a.call_id, name: a.name, input: a.input, subagent: a.is_subagent, done: false, parts: [] });
+      push(st, { kind: "tool", key, callId: a.call_id, name: a.name, input: a.input, subagent: a.is_subagent, done: false, parts: [], at: when });
       st.lastMsg = undefined;
       return;
     case "tool_call_updated": {
@@ -250,6 +279,7 @@ function apply(st: State, e: SessionEvent) {
     case "turn_started":
       // A turn nobody asked for is said; one whose trigger the agent did not report is not guessed at.
       st.selfTurn = a.trigger === "agent" ? items.length : undefined;
+      st.turnStart = e.t;
       if (a.trigger === "agent") notice(st, key, "The agent started a turn on its own", "info");
       return;
     case "turn_completed": {
@@ -258,6 +288,10 @@ function apply(st: State, e: SessionEvent) {
       st.selfTurn = undefined;
       const n = at === undefined ? undefined : items[at];
       if (a.origin && n?.kind === "notice") replace(st, at!, { ...n, text: `${n.text} · ${originWords(a.origin, a.origin.run_id ? st.runs.get(a.origin.run_id) : undefined)}` });
+      // The turn's end is its own row, after anything the turn said; its duration needs the start that was seen.
+      const duration = st.turnStart === undefined ? undefined : e.t - st.turnStart;
+      st.turnStart = undefined;
+      push(st, { kind: "turn", key, duration, interrupted: a.was_interrupted });
       return;
     }
     case "task_started": {
@@ -289,7 +323,7 @@ function apply(st: State, e: SessionEvent) {
       return;
     case "compaction":
       // The time of a compaction in the earlier history is the conversation's own (never when it was imported); absent, none is said.
-      notice(st, key, compactionWords(a.info, st.part === "earlier" ? at : e.t), "info");
+      notice(st, key, compactionWords(a.info, when), "info");
       return;
     case "rate_limit_notice":
       notice(st, key, rateLimitWords(a.info), "warn");
@@ -355,6 +389,8 @@ function sameItem(a: Item, b: Item): boolean {
     if (Object.is(x, y)) return true;
     if (Array.isArray(x) && Array.isArray(y)) return x.length === y.length && x.every((v, i) => Object.is(v, y[i]));
     if (k === "delivery") return sameDelivery(x as Delivery, y as Delivery) || JSON.stringify(x) === JSON.stringify(y);
+    // A re-fold builds fresh span records: the same cursor range is the same item.
+    if (k === "span") return (x as Span).from === (y as Span).from && (x as Span).to === (y as Span).to;
     return false;
   });
 }

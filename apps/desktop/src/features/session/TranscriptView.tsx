@@ -1,8 +1,8 @@
-import { memo, useContext, useMemo, useState, type ReactNode } from "react";
+import { memo, useContext, useMemo, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
 import { CopyButton, DriverBadge, ErrorBoundary, Icon, StatusPill, type DriverDescriptor } from "../../ui";
-import { dayTime } from "../../lib/format";
+import { dayTime, elapsed } from "../../lib/format";
 import { Markdown } from "./Markdown";
 import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
@@ -14,7 +14,8 @@ import { useAppState } from "../../state";
 import { Elapsed, StopTask } from "./SessionWork";
 import { taskState } from "./tasks";
 import { TranscriptCtx, type TranscriptScopeInfo } from "./transcriptContext";
-import { deliveryNote, resultText, toolArg, type Item, type ToolItem } from "./transcript";
+import { useOpenRow } from "./expansion";
+import { deliveryNote, resultText, toolArg, type Item, type ThinkingItem, type ToolItem, type TurnItem } from "./transcript";
 import type { RowItem, ToolRunItem } from "./toolRuns";
 
 const DIFF_CAP = 2000;
@@ -89,13 +90,13 @@ function ToolOutputs({ item }: { item: ToolItem }) {
 }
 
 const Tool = memo(function Tool({ item }: { item: ToolItem }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useOpenRow(`tool:${item.key}`);
   const icon = !item.done ? "working" : item.ok === false ? "failed" : "done";
   const tone = !item.done ? "c-working" : item.ok === false ? "c-failed" : "c-done";
   const first = resultText(item.result).split("\n")[0].slice(0, 60) || (item.parts.length ? `${item.parts.length} attachment${item.parts.length > 1 ? "s" : ""}` : "");
   return (
     <div className="tool">
-      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={toggle}>
         <Icon name={icon} size="sm" className={tone} spin={!item.done} />
         <span className="nm">{item.name}</span>
         <span className="arg">{toolArg(item.input)}</span>
@@ -114,7 +115,7 @@ const Tool = memo(function Tool({ item }: { item: ToolItem }) {
  * collapsed row in place without closing or opening it.
  */
 const ToolRun = memo(function ToolRun({ item }: { item: ToolRunItem }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useOpenRow(`run:${item.key}`);
   const latest = item.calls[item.calls.length - 1];
   const running = item.calls.some((c) => !c.done);
   const failed = item.calls.filter((c) => c.done && c.ok === false).length;
@@ -122,7 +123,7 @@ const ToolRun = memo(function ToolRun({ item }: { item: ToolRunItem }) {
   const tone = running ? "c-working" : latest.ok === false ? "c-failed" : "c-done";
   return (
     <div className="tool run" data-testid="tool-run">
-      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={toggle}>
         <Icon name={icon} size="sm" className={tone} spin={running} />
         <span className="nm">{item.calls.length} tool calls</span>
         <span className="arg" data-testid="tool-run-latest">{latest.name} {toolArg(latest.input)}</span>
@@ -131,7 +132,7 @@ const ToolRun = memo(function ToolRun({ item }: { item: ToolRunItem }) {
       </button>
       {open ? (
         <div className="run-b">
-          {item.entries.map((e) => (e.kind === "tool" ? <Tool key={e.key} item={e} /> : <Thinking key={e.key} text={e.text} />))}
+          {item.entries.map((e) => (e.kind === "tool" ? <Tool key={e.key} item={e} /> : <Thinking key={e.key} item={e} />))}
         </div>
       ) : (
         // What the calls produced stays in view; opened, each call shows its own.
@@ -179,18 +180,32 @@ function SubagentCard({ item, info, scope }: { item: ToolItem; info?: SubagentIn
   );
 }
 
-function Thinking({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+/**
+ * The model's reasoning, shown as the markdown it is written in, muted and under the row that opens it. Raw HTML in it is text
+ * (see Markdown), so reasoning that quotes markup shows the markup and runs nothing.
+ */
+function Thinking({ item }: { item: ThinkingItem }) {
+  const [open, toggle] = useOpenRow(`think:${item.key}`);
   return (
     <div>
-      <button type="button" className="think plainbtn" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="think plainbtn" aria-expanded={open} onClick={toggle}>
         <Icon name={open ? "chev" : "chevr"} size="xs" />
         <Icon name="sparkle" size="xs" />
         Thinking
       </button>
-      {open ? <div className="faint subopen">{text}</div> : null}
+      {open ? <div className="think-body"><Markdown text={item.text} variant="thinking" /></div> : null}
     </div>
   );
+}
+
+/**
+ * The end of a turn, in one muted line. Only what the turn reported is said: a turn whose start was not seen has no duration,
+ * and a turn the user stopped says so instead of "Done".
+ */
+function TurnFooter({ item }: { item: TurnItem }) {
+  const took = item.duration === undefined ? "" : elapsed(item.duration);
+  const words = item.interrupted ? (took ? `Interrupted after ${took}` : "Interrupted") : took ? `Done in ${took}` : "Done";
+  return <div className="turn-end faint fs12" data-testid="turn-footer" data-interrupted={item.interrupted ? "" : undefined}>{words}</div>;
 }
 
 /** Paths in assistant prose that exist in the session's folder, as clickable chips. */
@@ -246,7 +261,9 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
         <div className="msg-ai"><PartsView parts={item.parts} /></div>
       );
     case "thinking":
-      return <Thinking text={item.text} />;
+      return <Thinking item={item} />;
+    case "turn":
+      return <TurnFooter item={item} />;
     case "tool":
       return item.subagent ? <Subagent item={item} /> : <Tool item={item} />;
     case "toolrun":

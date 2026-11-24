@@ -4,6 +4,7 @@ import type { DriverDescriptor } from "../../ui";
 import { Button, Skeleton } from "../../ui";
 import { scopeKey, useApp, useAppState, useTranscriptOpen, type TranscriptScope } from "../../state";
 import { hasEarlier } from "./earlierWords";
+import { ExpansionCtx, expansionFor } from "./expansion";
 import { EarlierPart } from "./EarlierPart";
 import { TranscriptItem } from "./TranscriptView";
 import { TranscriptCtx } from "./transcriptContext";
@@ -44,6 +45,8 @@ export function TranscriptList({ sessionKey, host, id, scope, driver, followKey,
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const info = useMemo(() => ({ key: sessionKey, host, id }), [sessionKey, host, id]);
+  // What is expanded belongs to the transcript, not to the rows: it survives a row (or this list) being unmounted.
+  const expansion = useMemo(() => expansionFor(tk), [tk]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -64,15 +67,17 @@ export function TranscriptList({ sessionKey, host, id, scope, driver, followKey,
   return (
     <div className="transcript" ref={scroller} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
       <TranscriptCtx.Provider value={info}>
-        <div className="tr">
-          {slice && (slice.hasMore || shown?.list.hasMore) ? <Button size="sm" variant="ghost" pending={slice.loading || slice.earlier.loading} onClick={() => void transcripts.loadEarlier(sessionKey, scope)}>Load earlier messages</Button> : null}
-          {!slice || (slice.loading && items.length === 0) ? <><Skeleton width="50%" /><Skeleton /><Skeleton width="70%" /></> : null}
-          {slice?.error ? <div className="c-failed" role="alert">{slice.error}</div> : null}
-          {shown ? <EarlierPart earlier={shown.info} rows={earlierRows} driver={driver} error={shown.list.error} retrying={shown.list.loading} onRetry={() => void transcripts.loadEarlier(sessionKey, scope)} /> : null}
-          {slice && !slice.loading && !slice.error && items.length === 0 && empty ? <div className="faint fs12" data-testid="transcript-empty">{empty}</div> : null}
-          {items.map((it) => <TranscriptItem key={it.key} item={it} driver={driver} />)}
-          {children}
-        </div>
+        <ExpansionCtx.Provider value={expansion}>
+          <div className="tr">
+            {slice && (slice.hasMore || shown?.list.hasMore) ? <Button size="sm" variant="ghost" pending={slice.loading || slice.earlier.loading} onClick={() => void transcripts.loadEarlier(sessionKey, scope)}>Load earlier messages</Button> : null}
+            {!slice || (slice.loading && items.length === 0) ? <><Skeleton width="50%" /><Skeleton /><Skeleton width="70%" /></> : null}
+            {slice?.error ? <div className="c-failed" role="alert">{slice.error}</div> : null}
+            {shown ? <EarlierPart earlier={shown.info} rows={earlierRows} driver={driver} error={shown.list.error} retrying={shown.list.loading} onRetry={() => void transcripts.loadEarlier(sessionKey, scope)} /> : null}
+            {slice && !slice.loading && !slice.error && items.length === 0 && empty ? <div className="faint fs12" data-testid="transcript-empty">{empty}</div> : null}
+            {items.map((it) => <TranscriptItem key={it.key} item={it} driver={driver} />)}
+            {children}
+          </div>
+        </ExpansionCtx.Provider>
       </TranscriptCtx.Provider>
     </div>
   );

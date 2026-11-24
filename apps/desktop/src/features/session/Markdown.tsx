@@ -91,14 +91,15 @@ const USER_PLUGINS: Options["remarkPlugins"] = [remarkGfm, remarkHtmlAsText, rem
 /**
  * Markdown prose. `chat` is an agent's message and `user` the user's own prompt (which also keeps
  * its line breaks): both show raw HTML as literal text, never as elements; links go through
- * SafeLink. `file` (previews of untrusted files) makes links inert, drops images and raw HTML.
- * Memoised per text, so a stream of unrelated events does not re-render (or re-highlight)
+ * SafeLink. `thinking` is the agent's reasoning: chat rules, in a muted colour. `file` (previews of untrusted files) makes links inert,
+ * drops images and raw HTML. Memoised per text, so a stream of unrelated events does not re-render (or re-highlight)
  * finished messages.
  */
-export const Markdown = memo(function Markdown({ text, variant = "chat" }: { text: string; variant?: "chat" | "user" | "file" }) {
+export const Markdown = memo(function Markdown({ text, variant = "chat" }: { text: string; variant?: "chat" | "user" | "thinking" | "file" }) {
   const file = variant === "file";
+  const muted = variant === "thinking";
   return (
-    <div className={`md${file ? " pv-md" : ""}`} data-testid={file ? "preview-markdown" : undefined}>
+    <div className={`md${file ? " pv-md" : ""}${muted ? " md-muted" : ""}`} data-testid={file ? "preview-markdown" : undefined}>
       <ReactMarkdown remarkPlugins={file ? GFM : variant === "user" ? USER_PLUGINS : CHAT_PLUGINS} skipHtml={file} components={file ? FILE : CHAT}>
         {text}
       </ReactMarkdown>

@@ -78,9 +78,10 @@ describe("a resumed conversation shows its earlier messages above the session's 
     const msg = within(earlier).getByText(/The invoice totals are off by a cent/).closest(".msg-user")!;
     expect(within(msg as HTMLElement).getByTestId("msg-time")).toHaveTextContent(dayTime(at));
     expect(msg).not.toHaveTextContent(dayTime(imported));
-    // The session's own rows show none.
+    // The session's own rows show when they happened (their event's time), not the history's.
     const own = (await screen.findByText(/^Work on resumed-invoice-rounding/)).closest(".msg-user")!;
-    expect(within(own as HTMLElement).queryByTestId("msg-time")).toBeNull();
+    expect(within(own as HTMLElement).getByTestId("msg-time")).toHaveTextContent(/\d/);
+    expect(within(own as HTMLElement).getByTestId("msg-time")).not.toHaveTextContent(dayTime(at));
   });
 
   it("is read only: no delivery state on its messages, and every message can be copied", async () => {

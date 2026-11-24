@@ -127,12 +127,15 @@ describe("transcript fold: identity", () => {
     const f = createTranscriptFold();
     const events = [prompt(1, "a"), prompt(2, "b", { status: "queued" }), agent({ type: "tool_call_started", name: "Bash", call_id: "t", input: { command: "ls" }, is_subagent: false }), agent({ type: "assistant_delta", text: "x", message_id: "m" })];
     const a = f.update(events);
-    const b = f.update([...events, agent({ type: "input_sent", input: 2 })]);
+    // One event object per event: the stream is the same events every time it is folded.
+    const sent = agent({ type: "input_sent", input: 2 });
+    const finished = agent({ type: "tool_call_finished", name: "Bash", call_id: "t", ok: true, result: "out" });
+    const b = f.update([...events, sent]);
     expect(b[0]).toBe(a[0]);
     expect(b[1]).not.toBe(a[1]);
     expect(b[2]).toBe(a[2]);
     expect(b[3]).toBe(a[3]);
-    const c = f.update([...events, agent({ type: "input_sent", input: 2 }), agent({ type: "tool_call_finished", name: "Bash", call_id: "t", ok: true, result: "out" })]);
+    const c = f.update([...events, sent, finished]);
     expect(c[2]).not.toBe(b[2]);
     expect(c[2]).toMatchObject({ done: true });
     expect([c[0], c[1], c[3]]).toEqual([b[0], b[1], b[3]]);

@@ -93,13 +93,14 @@ describe("the fold of the session's own transcript", () => {
       "notice:Background task started · local_agent · “desc bg”",
       "notice:The agent started a turn on its own · origin: task-notification (session-task) · desc bg",
       "assistant:done",
+      "turn",
     ]);
   });
 
   it("an origin the agent gives without a run we know is shown as it is; a turn that ends without one keeps the plain notice", () => {
     const own = (origin?: unknown) => kinds(createTranscriptFold().update([agent({ type: "turn_started", trigger: "agent" }), agent({ type: "turn_completed", was_interrupted: false, num_turns: 1, usage: {}, origin })]));
-    expect(own({ kind: "task-notification", run_id: "unknown" })).toEqual(["notice:The agent started a turn on its own · origin: task-notification"]);
-    expect(own()).toEqual(["notice:The agent started a turn on its own"]);
+    expect(own({ kind: "task-notification", run_id: "unknown" })).toEqual(["notice:The agent started a turn on its own · origin: task-notification", "turn"]);
+    expect(own()).toEqual(["notice:The agent started a turn on its own", "turn"]);
   });
 
   it("a turn for one of our inputs, or one the agent did not say what started, gets no notice, and an origin never lands on a later turn", () => {
@@ -110,7 +111,8 @@ describe("the fold of the session's own transcript", () => {
       agent({ type: "turn_started", trigger: "unreported" }),
       agent({ type: "turn_completed", was_interrupted: false, num_turns: 1, usage: {} }),
     ]);
-    expect(items).toEqual([]);
+    // Only the turns' ends: no notice for either turn.
+    expect(kinds(items)).toEqual(["turn", "turn"]);
   });
 
   it("a subagent's lines and other subagents' tasks leave the rows that were already there the same objects", () => {

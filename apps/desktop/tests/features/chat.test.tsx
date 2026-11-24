@@ -135,8 +135,8 @@ describe("copy buttons", () => {
     if (execCommand) Object.defineProperty(document, "execCommand", execCommand);
     else delete (document as { execCommand?: unknown }).execCommand;
   });
-  const user: Item = { kind: "user", key: "1", text: "Do **this**:\n- a\n- b\n\n`x`", delivery: { state: "sent" }, attachments: [] };
-  const ai: Item = { kind: "assistant", key: "2", text: "Here is `cfg.name` and\n\n```sh\nnpm test -- --run\n```\n\n- one\n- two" };
+  const user: Item = { kind: "user", key: "1", text: "Do **this**:\n- a\n- b\n\n`x`", delivery: { state: "sent" }, attachments: [], span: { from: 1, to: 1 } };
+  const ai: Item = { kind: "assistant", key: "2", text: "Here is `cfg.name` and\n\n```sh\nnpm test -- --run\n```\n\n- one\n- two", span: { from: 2, to: 2 } };
 
   it("copies the user's prompt as typed (the markdown source, not the rendered text)", async () => {
     render(<TranscriptItem item={user} />);
@@ -199,7 +199,7 @@ describe("copy buttons", () => {
   });
 
   it("tool code (a shell command) is copyable too", async () => {
-    const tool: Item = { kind: "tool", key: "3", callId: "c", name: "Bash", input: { command: "ls -la\necho hi" }, subagent: false, done: true, ok: true, result: "x", parts: [] };
+    const tool: Item = { kind: "tool", key: "3", callId: "c", name: "Bash", input: { command: "ls -la\necho hi" }, subagent: false, done: true, ok: true, result: "x", parts: [], span: { from: 3, to: 3 } };
     render(<TranscriptItem item={tool} />);
     await userEvent.click(screen.getByRole("button", { name: /Bash/ }));
     await userEvent.click(within(screen.getByTestId("tool-command").parentElement!).getByRole("button", { name: "Copy code" }));

@@ -27,3 +27,4 @@
 .md table{border-collapse:collapse;font-size:.95em}
 .md th,.md td{border:1px solid var(--line);padding:4px 9px;text-align:left;vertical-align:top}
 .md th{background:var(--surface-2);font-weight:600}
+.md.md-muted{color:var(--fg-3)}

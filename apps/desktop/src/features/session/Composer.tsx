@@ -11,6 +11,15 @@ import { clearDraft, peekDraft } from "./draft";
 import { usePromptRecall } from "./usePromptRecall";
 import { inShell } from "../../lib/shell";
 
+/** Why a reported slash command cannot be sent with attachments: a command takes text only, so the files or the "/" must go. */
+const COMMAND_WITH_FILES = "Commands can't take attachments. Remove the files, or remove the /.";
+
+/** Whether `text` starts with a slash command the agent reported. An unreported `/foo` is ordinary prompt text, sent as it is. */
+function isReportedCommand(text: string, commands: readonly { name: string }[]): boolean {
+  const m = /^\/(\S+)/.exec(text);
+  return !!m && commands.some((c) => c.name === m[1]);
+}
+
 /** Pending attachments: thumbnails or chips, each with its tooltip and a remove button. */
 export function PendingList({ files, input, onRemove }: { files: PendingFile[]; input: SessionSnapshot["prompt_input"]; onRemove: (k: string) => void }) {
   if (!files.length) return null;
@@ -49,7 +58,11 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
   const fileInput = useRef<HTMLInputElement>(null);
   const input = snap.prompt_input;
   const canAttach = input.max_attachments > 0;
-  const problem = useMemo(() => (files.length ? batchProblem(files, input) : null), [files, input]);
+  // A reported command takes no files: that is said while both are here, and Send stays off until one of them goes.
+  const problem = useMemo(() => {
+    if (!files.length) return null;
+    return batchProblem(files, input) ?? (isReportedCommand(text.trim(), snap.slash_commands) ? COMMAND_WITH_FILES : null);
+  }, [files, input, text, snap.slash_commands]);
   const filesRef = useRef(files);
   filesRef.current = files;
   // Thumbnails are object URLs: release them with the composer.

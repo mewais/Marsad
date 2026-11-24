@@ -137,3 +137,5 @@
 .subrow-acts{display:inline-flex;align-items:center;gap:2px;flex:none;margin-left:auto}
 .subrow-acts a.btn{text-decoration:none}
 .substrip-empty{padding:10px 12px;font-size:12px}
+.think-body{margin:6px 0 0 18px;font-size:12.5px}
+.turn-end{margin:6px 0 2px}
