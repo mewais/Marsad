@@ -4670,7 +4670,7 @@ dependencies = [
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4679,7 +4679,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4688,7 +4688,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -4706,7 +4706,7 @@ dependencies = [
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -4717,7 +4717,7 @@ dependencies = [
 [[package]]
 name = "wasit-diag"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "serde",
  "serde_json",
@@ -4730,7 +4730,7 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4739,7 +4739,7 @@ dependencies = [
 [[package]]
 name = "wasit-process"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "libc",
  "tokio",
@@ -4749,9 +4749,10 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "fastrand",
  "futures",
  "serde",
@@ -4774,7 +4775,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#26e6e7ca5ad4d9358f9ae81bf28344ca99638339"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#1d1bb1ddf9fc3ebb62d1490f76999dbe59cd9819"
 dependencies = [
  "futures-core",
  "libc",
