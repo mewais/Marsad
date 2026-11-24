@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export interface VirtualListHandle {
   /** Scrolls the least that brings the row into view (a row is not centred). `highlight` flashes it once. No-op for an unknown key. */
@@ -46,15 +46,25 @@ interface Layout {
   index: Map<string, number>;
 }
 
-/** One mounted row. It is measured while mounted, so a row that grows (a gate, an expanded detail) moves the rows below it. */
-function MeasuredRow({ vkey, flash, observe, unobserve, children }: {
+interface RowProps<T> {
+  item: T;
+  index: number;
   vkey: string;
   /** Flash count of this row (0: not flashed). Odd and even counts differ, so each flash restarts the animation. */
   flash: number;
+  renderItem: (item: T, index: number) => ReactNode;
   observe: (el: Element) => void;
   unobserve: (el: Element) => void;
-  children: ReactNode;
-}) {
+}
+
+/**
+ * One mounted row. It is measured while mounted, so a row that grows (a gate, an expanded detail) moves the rows below it.
+ *
+ * It calls `renderItem` itself and is memoised: a scroll re-renders the list but not a row whose item, index, flash and the
+ * stable callbacks did not change, so the row's body (markdown, highlighting) is never recomputed while scrolling. Only rows
+ * that actually moved, appeared, or changed render again. `renderItem`, `observe` and `unobserve` must keep stable identities.
+ */
+function MeasuredRowInner<T>({ item, index, vkey, flash, renderItem, observe, unobserve }: RowProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -63,8 +73,9 @@ function MeasuredRow({ vkey, flash, observe, unobserve, children }: {
     return () => unobserve(el);
   }, [observe, unobserve]);
   const flashName = flash === 0 ? undefined : flash % 2 ? "a" : "b";
-  return <div ref={ref} data-vkey={vkey} data-flash={flashName}>{children}</div>;
+  return <div ref={ref} data-vkey={vkey} data-flash={flashName}>{renderItem(item, index)}</div>;
 }
+const MeasuredRow = memo(MeasuredRowInner) as <T>(p: RowProps<T>) => React.ReactElement;
 
 /**
  * Windowing list with variable, measured row heights (rows may grow: inline gates, expanded
@@ -270,9 +281,16 @@ function VirtualListInner<T>(
         const i = start + j;
         const k = keys[i];
         return (
-          <MeasuredRow key={k} vkey={k} flash={flash?.key === k ? flash.n : 0} observe={observe} unobserve={unobserve}>
-            {renderItem(it, i)}
-          </MeasuredRow>
+          <MeasuredRow<T>
+            key={k}
+            item={it}
+            index={i}
+            vkey={k}
+            flash={flash?.key === k ? flash.n : 0}
+            renderItem={renderItem}
+            observe={observe}
+            unobserve={unobserve}
+          />
         );
       })}
       <div style={{ height: Math.max(0, total - offsets[end]) }} aria-hidden="true" />

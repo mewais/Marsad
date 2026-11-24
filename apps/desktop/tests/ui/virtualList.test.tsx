@@ -3,6 +3,19 @@ import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualList, type VirtualListHandle } from "../../src/ui";
 
+/**
+ * A row whose body is NOT memoised, so it re-renders whenever its React element is recreated — the way an
+ * unmemoised markdown row would. It records each render under its id, so a test can count how often a mounted
+ * row's body renders across a run of scroll events.
+ */
+function countingList(items: Row[], renders: Record<string, number>, props: Partial<React.ComponentProps<typeof VirtualList<Row>>> = {}) {
+  const Body = ({ id }: { id: string }) => {
+    renders[id] = (renders[id] ?? 0) + 1;
+    return <div data-testid="row">{id}</div>;
+  };
+  return list(items, { renderItem: (r) => <Body id={r.id} />, ...props });
+}
+
 // Layout is mocked: every `.vlist` is VIEW pixels high and every row is ROW pixels (jsdom has no layout).
 const VIEW = 400;
 const ROW = 40;
@@ -148,6 +161,22 @@ describe("VirtualList onReachStart", () => {
     expect(onReachStart).not.toHaveBeenCalled();
     scrollBox(2000);
     expect(onReachStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("VirtualList scroll cost", () => {
+  it("does not re-render a mounted row's body on scroll events that do not change its position", () => {
+    const renders: Record<string, number> = {};
+    render(countingList(rows(0, 200), renders, { initialCount: 20 }));
+    // r5 sits in the mounted window at the top and stays there across these nudges (all within the first row's height).
+    expect(screen.getByText("r5")).toBeInTheDocument();
+    const before = renders["r5"];
+    expect(before).toBeGreaterThan(0);
+    // Several scroll events that keep the same rows mounted. Each fires a scroll re-render of the list; a cheap list
+    // must not re-render the bodies of rows whose position and visibility did not change.
+    for (const top of [5, 12, 20, 28, 35, 10, 3]) scrollBox(top);
+    expect(screen.getByText("r5")).toBeInTheDocument();
+    expect(renders["r5"]).toBe(before);
   });
 });
 

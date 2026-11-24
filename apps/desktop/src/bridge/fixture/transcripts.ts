@@ -65,7 +65,8 @@ export function buildTranscript(spec: Spec, sessionId: string, now: number): { e
   if (spec.n === 7) richAuthTranscript(b, plan);
   else if (spec.n === MEDIA_SPEC.n) mediaTranscript(b, sessionId);
   else if (spec.n === BACKGROUND_SPEC.n) backgroundTranscript(b);
-  else genericTranscript(b, spec, spec.longHistory ? 70 : 1);
+  else if (spec.rounds && spec.rounds >= 100) hugeTranscript(b, spec, spec.rounds);
+  else genericTranscript(b, spec, spec.rounds ?? (spec.longHistory ? 70 : 1));
 
   const nGates = spec.gates?.length ?? 0;
   const lastBefore = b.events[b.events.length - 1].t;
@@ -81,6 +82,36 @@ export function buildTranscript(spec: Spec, sessionId: string, now: number): { e
   void sessionId;
   const earlier = script && earlierEvent ? { info: script.info, items: itemsAt(earlierEvent.cursor, earlierEvent.t, script.items), plan: script.plan } : undefined;
   return { events: b.events, pending, plan, earlier };
+}
+
+/**
+ * A very long session (thousands of rows) made of many completed turns, each with a user prompt (timestamped),
+ * occasional thinking (markdown), an assistant answer (timestamped, markdown), one or two tool rows, and a turn
+ * footer ("Done in …"). The last turn is left open, so a `working` session keeps streaming at the bottom. Used by
+ * the `?huge=1` fixture to exercise the virtualised transcript.
+ */
+function hugeTranscript(b: Builder, spec: Spec, turns: number) {
+  for (let i = 0; i < turns; i++) {
+    b.prompt(`Index and summarise module ${i} of ${spec.proj}.`);
+    b.turnStarted();
+    if (i % 5 === 0) b.agent({ type: "thinking_delta", text: `Before touching **module ${i}**, I'll re-read its exports and the two call sites, then decide whether the change is safe.\n\n- check \`src/module-${i}.ts\`\n- run the module's tests` }, 1800);
+    b.agent({ type: "assistant_delta", text: `Working through module ${i}. It re-exports \`value${i}\` and is imported by two siblings; the change is local, so I'll update it and run \`pnpm test\`.`, message_id: `m${i}` }, 1500);
+    b.tool("Read", `r${i}`, { file_path: `src/module-${i}.ts` }, true, `// module ${i}\nexport const value${i} = ${i};\n`);
+    if (i % 3 === 2) b.tool("Bash", `b${i}`, { command: `pnpm test src/module-${i}.test.ts` }, i % 11 !== 10, `${30 + (i % 20)} passed${i % 11 === 10 ? " · 1 failed" : ""} · ${(0.4 + (i % 5) * 0.1).toFixed(1)}s`);
+    // A completed turn: its footer reads "Done in …" from the start/end gap. Vary the gap so the footers differ.
+    b.agent({ type: "turn_completed", was_interrupted: i % 17 === 16, num_turns: 1, usage: { input_tokens: 1800, output_tokens: 320, cache_read_tokens: 900, cache_creation_tokens: 120, cost_usd: 0.01 }, reply: `Module ${i} indexed.` }, 2200 + (i % 7) * 1500);
+    if (i === Math.floor(turns / 2)) {
+      b.agent({ type: "compaction", info: { trigger: "auto", pre_tokens: 168_400, post_tokens: 41_200, cumulative_dropped_tokens: 127_200, duration_ms: 9_400 } });
+      b.agent({ type: "rate_limit_notice", info: { status: "allowed_warning", resets_at: Math.floor(b.t / 1000) + 3 * 3600, rate_limit_type: "five_hour", overage_status: "allowed", is_using_overage: false } });
+    }
+  }
+  // Leave a final turn open so a working session streams new rows at the bottom.
+  if (spec.kind === "working") {
+    b.prompt(`Now re-index module ${turns} and watch for regressions.`);
+    b.turnStarted();
+    b.agent({ type: "assistant_delta", text: `On it — re-reading module ${turns} and running the suite.`, message_id: `m${turns}` }, 1500);
+    b.agent({ type: "tool_call_started", name: "Read", call_id: "read-live", input: { file_path: `src/module-${turns}.ts` }, is_subagent: false }, 1500);
+  }
 }
 
 function genericTranscript(b: Builder, spec: Spec, rounds: number) {

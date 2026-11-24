@@ -26,6 +26,8 @@ export interface Spec {
   gates?: GateRequest[];
   /** Fixture: the session has a long history (paging demo). */
   longHistory?: boolean;
+  /** Fixture: how many scripted work rounds the generic transcript runs (thousands-of-rows demo); overrides the default. */
+  rounds?: number;
   /** Fixture: it is working only because tasks run in the background (no turn is open). */
   backgroundOnly?: boolean;
   /** Fixture: the session resumed a conversation, and its earlier history is complete, still arriving, or cannot be had (see `earlier.ts`). */

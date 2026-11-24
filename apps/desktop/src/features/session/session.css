@@ -17,7 +17,9 @@
 .tr-wrap{display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
 /* The transcript is one virtual list: rows are positioned by offsets, so the scroller has no padding (the rows carry it) and the
    browser does not anchor scrolling itself (the list does). Each row wrapper holds the column and the spacing the container gap used to. */
-.transcript{flex:1;overflow-anchor:none}
+/* Reserve the scrollbar's space so it appearing/disappearing as the list grows never reflows row widths (which would re-measure
+   row heights and jitter the virtual list under the reader). */
+.transcript{flex:1;overflow-anchor:none;scrollbar-gutter:stable}
 .tr-item{box-sizing:border-box;max-width:868px;margin:0 auto;padding:0 24px 12px}
 .tr-item:empty{padding:0}
 .tr-head{padding-top:16px}
