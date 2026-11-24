@@ -22,6 +22,8 @@
 //! | [`methods::PTY_RESIZE`] | [`pty::PtyResizeRequest`] | [`Ack`] |
 //! | [`methods::PTY_CLOSE`] | [`pty::PtyRef`] | [`Ack`] |
 //! | [`methods::PTY_LIST`] | — | [`pty::PtyList`] |
+//! | [`methods::EXEC_START`] | [`exec::ExecStartRequest`] | [`exec::ExecStarted`] (at once; output on [`topics::exec_output`]) |
+//! | [`methods::EXEC_CANCEL`] | [`exec::ExecRef`] | [`Ack`] (once the command has ended) |
 //! | [`methods::FS_LIST`] | [`fs::FsListRequest`] | [`fs::FsListing`] |
 //! | [`methods::FS_HOME`] | — | [`fs::FsHome`] |
 //! | [`methods::FS_EXISTS`] | [`fs::FsPathRequest`] | [`fs::FsExists`] |
@@ -102,6 +104,7 @@
 //! |---|---|---|
 //! | Wasit runtime: `host.sessions`, `session.events:<id>`, `drivers.inventory` | see [`runtime`] | |
 //! | `pty.output:<pty id>` ([`topics::pty_output`]) | [`pty::PtyEvent`] | byte offset after the event (decimal) |
+//! | `host.exec:<exec id>` ([`topics::exec_output`]) | [`exec::ExecEvent`] | sequence number of the event (decimal); ends after `exited` |
 //! | [`topics::FLEET`] (hub) | [`fleet::FleetEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
 //! | [`topics::HOSTS_LINKS`] (hub) | [`hosts::LinkStates`] | `"<epoch>.<n>"`; every event is the full map |
 //! | [`topics::WORKSTREAMS`] (hub) | [`workstream::WorkstreamsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
@@ -119,6 +122,7 @@ pub mod agentconfig;
 pub mod ask;
 pub mod daemon;
 pub mod diag;
+pub mod exec;
 pub mod export;
 pub mod fleet;
 pub mod fs;
@@ -163,6 +167,9 @@ pub mod methods {
     pub const PTY_RESIZE: &str = "pty.resize";
     pub const PTY_CLOSE: &str = "pty.close";
     pub const PTY_LIST: &str = "pty.list";
+
+    pub const EXEC_START: &str = "host.exec.start";
+    pub const EXEC_CANCEL: &str = "host.exec.cancel";
 
     pub const FS_LIST: &str = "fs.list";
     pub const FS_HOME: &str = "fs.home";
@@ -251,6 +258,7 @@ pub mod methods {
 /// Topic names.
 pub mod topics {
     pub const PTY_OUTPUT_PREFIX: &str = "pty.output:";
+    pub const EXEC_OUTPUT_PREFIX: &str = "host.exec:";
     pub const FLEET: &str = "fleet";
     pub const HOSTS_LINKS: &str = "hosts.links";
     pub const WORKSTREAMS: &str = "workstreams";
@@ -260,10 +268,26 @@ pub mod topics {
     pub fn pty_output(id: &str) -> String {
         format!("{PTY_OUTPUT_PREFIX}{id}")
     }
+
+    /// The output topic of one `host.exec` execution.
+    pub fn exec_output(exec_id: &str) -> String {
+        format!("{EXEC_OUTPUT_PREFIX}{exec_id}")
+    }
 }
 
 /// Routes of the services every daemon serves (and the hub routes by `host`).
-pub const HOST_ROUTES: &[&str] = &["git.", "pty.", "fs.", "ask.", "daemon.", "agentconfig.base"];
+/// `host.exec.*` and its `host.exec:` topic are routed by their prefixes (`host.` alone would
+/// also catch the runtime's `host.info`, `host.sessions`, ...).
+pub const HOST_ROUTES: &[&str] = &[
+    "git.",
+    "pty.",
+    "fs.",
+    "ask.",
+    "daemon.",
+    "agentconfig.base",
+    "host.exec.",
+    "host.exec:",
+];
 
 /// Routes of the hub-only services.
 pub const HUB_ROUTES: &[&str] = &[

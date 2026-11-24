@@ -1,7 +1,8 @@
-//! Services every daemon serves for its own host: `git.*`, `pty.*`, `fs.*`, `ask.user`,
-//! `agentconfig.base`, `daemon.*`.
+//! Services every daemon serves for its own host: `git.*`, `pty.*`, `host.exec.*`, `fs.*`,
+//! `ask.user`, `agentconfig.base`, `daemon.*`.
 
 pub mod ask;
+pub mod exec;
 pub mod fs;
 pub mod git;
 pub mod pty;
@@ -12,6 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use marsad_proto::agentconfig::{BaseConfig, BaseRequest};
 use marsad_proto::daemon::DaemonInfo;
+use marsad_proto::exec::{ExecRef, ExecStartRequest};
 use marsad_proto::fs::{FsHome, FsListRequest, FsPathRequest};
 use marsad_proto::git::{
     GitCommitRequest, GitDiffRequest, GitDiscardRequest, GitStatusRequest, GitTarget,
@@ -35,6 +37,7 @@ pub struct HostServices {
     pub manager: SessionManager,
     pub discovery: Discovery,
     pub ptys: pty::Ptys,
+    pub execs: exec::Execs,
     pub info: DaemonInfo,
     /// Cancelled by `daemon.shutdown`.
     pub shutdown: CancellationToken,
@@ -185,6 +188,15 @@ impl Service for HostServices {
                     ptys: self.ptys.list(),
                 })
                 .map_err(rpc_to)?,
+                methods::EXEC_START => {
+                    let r: ExecStartRequest = params(p).map_err(rpc_to)?;
+                    ok(self.execs.start(&r.cwd, &r.line).await?).map_err(rpc_to)?
+                }
+                methods::EXEC_CANCEL => {
+                    let r: ExecRef = params(p).map_err(rpc_to)?;
+                    self.execs.cancel(&r.exec_id).await?;
+                    ok(Ack {}).map_err(rpc_to)?
+                }
                 methods::FS_LIST => {
                     let r: FsListRequest = params(p).map_err(rpc_to)?;
                     ok(fs::list(&r.path, r.show_hidden, r.dirs_only).await?).map_err(rpc_to)?
@@ -231,16 +243,29 @@ impl Service for HostServices {
         from: Option<Cursor>,
     ) -> Result<EventStream, RpcError> {
         if let Some(id) = topic.strip_prefix(topics::PTY_OUTPUT_PREFIX) {
-            let from =
-                match &from {
-                    None => None,
-                    Some(c) => Some(c.as_u64().ok_or_else(|| {
-                        MarsadError::invalid(format!("bad cursor {c}")).into_rpc()
-                    })?),
-                };
-            return self.ptys.subscribe(id, from).map_err(MarsadError::into_rpc);
+            return self
+                .ptys
+                .subscribe(id, cursor_of(&from)?)
+                .map_err(MarsadError::into_rpc);
+        }
+        if let Some(id) = topic.strip_prefix(topics::EXEC_OUTPUT_PREFIX) {
+            return self
+                .execs
+                .subscribe(id, cursor_of(&from)?)
+                .map_err(MarsadError::into_rpc);
         }
         Err(RpcError::topic_not_found(topic))
+    }
+}
+
+/// The sequence number a subscription's cursor names (`None` = from the start).
+fn cursor_of(from: &Option<Cursor>) -> Result<Option<u64>, RpcError> {
+    match from {
+        None => Ok(None),
+        Some(c) => c
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| MarsadError::invalid(format!("bad cursor {c}")).into_rpc()),
     }
 }
 

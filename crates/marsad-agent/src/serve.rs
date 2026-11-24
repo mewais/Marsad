@@ -32,7 +32,7 @@ use wasl_node::{Node, NodeConfig, NodeService};
 
 use crate::cli::{default_host_id, Options};
 use crate::diag::{self, emit};
-use crate::host::{pty::Ptys, HostServices};
+use crate::host::{exec::Execs, pty::Ptys, HostServices};
 use crate::hub::auth::Prompts;
 use crate::hub::export::job::{HubFacts, Limits};
 use crate::hub::export::{ExportEnv, Exports};
@@ -275,11 +275,13 @@ pub async fn serve(o: Options) -> ExitCode {
     .with_environment(env);
     // Terminals end with their session, and with this daemon (below).
     let ptys = Ptys::default();
+    let execs = Execs::default();
     ptys.follow_sessions(manager.clone());
     let host = HostServices {
         manager: manager.clone(),
         discovery,
         ptys: ptys.clone(),
+        execs: execs.clone(),
         info,
         shutdown: shutdown.clone(),
     };
@@ -413,6 +415,7 @@ pub async fn serve(o: Options) -> ExitCode {
     server.shutdown(Duration::from_secs(2)).await;
     // No shell outlives the daemon that owns it.
     ptys.shutdown().await;
+    execs.shutdown().await;
     if let Some(h) = hub_handle {
         h.shutdown().await;
     }
