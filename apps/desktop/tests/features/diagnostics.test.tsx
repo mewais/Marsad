@@ -269,10 +269,13 @@ describe("a session's Diagnostics tab", () => {
 
   describe("the host's clock offset", () => {
     /** The Diagnostics tab of a session of `name` with one prompt sent from the app; the legend is under its path. */
-    async function promptPath(name: string, setup: (b: Backend) => void = () => undefined) {
+    async function promptPath(name: string, setup: (b: Backend) => void = () => undefined, rttMs?: number) {
       const user = userEvent.setup();
+      // The fake clock goes in before the backend is built: the fixture takes its clock from Date.now when it is built.
+      if (rttMs !== undefined) vi.useFakeTimers({ toFake: ["Date", "performance"] });
       const backend = quietBackend();
       backend.hub.settings["developer.mode"] = true;
+      if (rttMs !== undefined) exchangeTakes(backend, rttMs);
       setup(backend);
       const s = sessionByName(backend, name);
       const r = await renderApp(`/session/${s.host}/${s.id}`, backend);
@@ -287,10 +290,24 @@ describe("a session's Diagnostics tab", () => {
     }
     const asked = (b: Backend) => b.requests.filter((q) => q.method === "diag.sources");
 
+    /**
+     * Makes the measuring exchange take exactly `rttMs` on the fake clock (see `promptPath`), with the host reading its
+     * clock at the middle of it, whatever the load on the machine: the offset is then exactly the host's skew.
+     */
+    function exchangeTakes(b: Backend, rttMs: number) {
+      const request = b.request.bind(b);
+      b.request = (<T,>(m: string, p?: unknown, o?: object) => {
+        if (m !== "diag.sources") return request<T>(m, p, o);
+        vi.advanceTimersByTime(rttMs / 2); // the way out: the host reads its clock here
+        return request<T>(m, p, o).finally(() => vi.advanceTimersByTime(rttMs / 2)); // the way back
+      }) as typeof b.request;
+    }
+    afterEach(() => vi.useRealTimers());
+
     it("is measured once when the tab opens, against the host's own answer, and the legend gives the offset and the round trip", async () => {
-      const { backend, rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = 2500; });
+      const { backend, rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = 2500; }, 280);
       const legend = await within(await rowOf()).findByTestId("clock-legend");
-      await waitFor(() => expect(legend.textContent).toMatch(/hetzner-ax41's clock is 2\.[45] s ahead of this computer's \(measured once when this tab opened; round trip \d+ ms\)\. Its times are corrected by that and are still approximate\.$/));
+      await waitFor(() => expect(legend.textContent).toMatch(/hetzner-ax41's clock is 2\.5 s ahead of this computer's \(measured once when this tab opened; round trip 280 ms\)\. Its times are corrected by that and are still approximate\.$/));
       expect(legend).toHaveTextContent(/^≈ means another machine's clock/);
       // One request, to the host's daemon; nothing polls.
       expect(asked(backend).map((q) => q.host)).toEqual(["hz"]);
@@ -322,13 +339,13 @@ describe("a session's Diagnostics tab", () => {
 
     it("the offset is part of the text the panel copies", async () => {
       const user = userEvent.setup();
-      const { rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = -1500; });
-      await waitFor(async () => expect(await rowOf()).toHaveTextContent(/1\.[45] s behind this computer's/));
+      const { rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = -1500; }, 280);
+      await waitFor(async () => expect(await rowOf()).toHaveTextContent(/1\.5 s behind this computer's/));
       const written: string[] = [];
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void written.push(t) } });
       await user.click(screen.getByRole("button", { name: "Copy as text" }));
       await waitFor(() => expect(written).toHaveLength(1));
-      expect(written[0]).toMatch(/Clock: hetzner-ax41's clock is 1\.[45] s behind this computer's/);
+      expect(written[0]).toMatch(/Clock: hetzner-ax41's clock is 1\.5 s behind this computer's/);
     });
   });
 
