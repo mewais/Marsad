@@ -1,5 +1,5 @@
 import { permissionKind } from "../lib/gatewords";
-import type { GitSummary, HostId, ModelInfo, NotContinuable, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
+import type { DriverInventory, GitSummary, HostId, ModelInfo, NotContinuable, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
 import { sessionKey } from "../bridge/wire";
 import { basename } from "../lib/format";
 import { phaseToStatus, type StatusKey } from "../ui/status";
@@ -221,4 +221,75 @@ export function modelChoice(s: SessionSnapshot): { value: string | undefined; op
   const alias = options.filter((o) => o.value !== "default" && cur.toLowerCase().includes(o.value.toLowerCase())).sort((a, b) => b.value.length - a.value.length)[0];
   if (alias) return { value: alias.value, options };
   return { value: cur, options: [{ value: cur, label: cur, mono: true }, ...options] };
+}
+
+export type FieldAvailability = "ready" | "loading" | "not_reported";
+
+/** Whether the session process is live (may still deliver async init/model/mode data). */
+export const sessionLive = (s: Pick<SessionSnapshot, "phase">): boolean =>
+  s.phase.state === "starting" || s.phase.state === "idle" || s.phase.state === "working" || s.phase.state === "needs_you";
+
+/**
+ * Whether `available_models` has arrived, is still expected while the session is live, or is not
+ * reported by this agent (`!capabilities.set_model`, ended session, or disconnected host).
+ */
+export function sessionModelsState(
+  s: Pick<SessionSnapshot, "phase" | "capabilities" | "available_models">,
+  stale = false,
+): FieldAvailability {
+  if (s.available_models.length > 0) return "ready";
+  if (sessionLive(s) && !stale && s.capabilities.set_model) return "loading";
+  return "not_reported";
+}
+
+/**
+ * Whether `available_modes` has arrived, is still expected while the session is live, or is not
+ * reported by this agent (`!capabilities.set_mode`, ended session, or disconnected host).
+ */
+export function sessionModesState(
+  s: Pick<SessionSnapshot, "phase" | "capabilities" | "available_modes">,
+  stale = false,
+): FieldAvailability {
+  if (s.available_modes.length > 0) return "ready";
+  if (sessionLive(s) && !stale && s.capabilities.set_mode) return "loading";
+  return "not_reported";
+}
+
+/**
+ * Whether the session's `cli_version` has arrived, is still awaited during startup on a live
+ * connected session, or was not reported by the agent.
+ */
+export function sessionVersionState(
+  s: Pick<SessionSnapshot, "phase" | "cli_version" | "native_session_id" | "model" | "turns_completed" | "turn">,
+  stale = false,
+): FieldAvailability {
+  if (s.cli_version) return "ready";
+  if (sessionLive(s) && !stale && (s.phase.state === "starting" || (!s.native_session_id && !s.model && s.turns_completed === 0 && !s.turn))) {
+    return "loading";
+  }
+  return "not_reported";
+}
+
+export type DriverVersionState =
+  | { kind: "ready"; version: string }
+  | { kind: "loading" }
+  | { kind: "not_reported" }
+  | { kind: "not_installed" };
+
+/**
+ * State of a driver's CLI version on a host from its inventory entry and link connectedness:
+ * distinguishes async probing (`loading`) from `not_installed` or `not_reported`.
+ */
+export function driverVersionState(
+  d: Pick<DriverInventory, "installed" | "version" | "refreshing" | "refreshed_at_ms" | "probes">,
+  connected: boolean,
+): DriverVersionState {
+  if (d.version) return { kind: "ready", version: d.version };
+  if (d.installed) {
+    const versionProbed = d.probes.some((p) => p.kind === "version");
+    if (connected && d.refreshing && !versionProbed) return { kind: "loading" };
+    return { kind: "not_reported" };
+  }
+  if (connected && d.refreshing && !d.refreshed_at_ms) return { kind: "loading" };
+  return { kind: "not_installed" };
 }

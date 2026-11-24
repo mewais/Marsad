@@ -51,6 +51,7 @@ fn runtime_config(o: &Options) -> Result<RuntimeConfig, String> {
     let launcher = ShimLauncher::current_exe("shim").map_err(|e| e.to_string())?;
     let layout = o.layout();
     let mut cfg = RuntimeConfig::new(layout.data.clone(), launcher);
+    cfg.derivation = version::build_id();
     cfg.run_dir = Some(layout.run.clone());
     for (d, p) in &o.driver_bin {
         let id = DriverId::new(d.clone());
@@ -491,6 +492,7 @@ async fn start_hub(
         interactive_auth: false,
         local_files: true,
         shared_connection: false,
+        signed_out: false,
         machine: Some(o.layout().machine.clone()),
     };
     let registry = Registry::start(

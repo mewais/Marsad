@@ -5,4 +5,8 @@ import type { SessionId } from "./SessionId";
  * `session.trail.page`: the trail entries with `cursor < before` (all when `None`), the last
  * `limit` of them.
  */
-export type TrailRequest = { id: SessionId, before?: number | null, limit: number, };
+export type TrailRequest = { id: SessionId, before?: number | null, limit: number, 
+/**
+ * Byte budget of the page, see [`page_budget`].
+ */
+max_bytes?: number | null, };

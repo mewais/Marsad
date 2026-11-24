@@ -583,6 +583,7 @@ async fn bootstrap_with(sshd: &Sshd, input: Vec<u8>) -> std::process::Output {
         interactive_auth: false,
         local_files: false,
         shared_connection: false,
+        signed_out: false,
         machine: None,
     };
     let argv = marsad_agent::hub::transport::bootstrap_argv(
@@ -696,6 +697,7 @@ async fn a_link_step_without_a_connection_connects_a_key_and_never_asks_for_a_pa
                 interactive_auth: false,
                 local_files: false,
                 shared_connection: true,
+                signed_out: false,
                 machine: None,
             };
             let argv = bootstrap_argv_via(

@@ -480,6 +480,7 @@ mod tests {
             interactive_auth: false,
             local_files: false,
             shared_connection: false,
+            signed_out: false,
             machine: None,
         }
     }

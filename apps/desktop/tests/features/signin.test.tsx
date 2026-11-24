@@ -27,12 +27,11 @@ async function app(path = "/inbox", { second = false } = {}) {
 describe("a host that waits for the user to sign in", () => {
   it("is said everywhere it shows, and nothing is asked of the host until the user clicks", async () => {
     const { backend, history } = await app();
-    // Inbox: the waiting host heads the list, compactly, with the one click.
+    // Inbox: compact one-line note naming disconnected hosts, with Sign in for waiting hosts and a link to Hosts (no error dump).
     const group = await screen.findByTestId("waiting-hosts");
-    expect(within(group).getByText("gpu-box")).toBeInTheDocument();
-    expect(group).toHaveTextContent("gpu-box is not connected.");
-    expect(group).toHaveTextContent("Marsad will not reconnect these on its own: signing in needs you");
+    expect(group).toHaveTextContent(/gpu-box/);
     expect(within(group).getByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(within(group).getByRole("link", { name: "Details on Hosts" })).toHaveAttribute("href", "#/hosts");
     // The strip stays out of the Inbox's way; the bell and the Hosts item count the host, the Inbox item counts sessions.
     expect(strip()).toBeNull();
     const rail = screen.getByRole("navigation", { name: "Main" });
@@ -97,8 +96,11 @@ describe("a host that waits for the user to sign in", () => {
     expect(within(s).getByRole("button", { name: "Sign in to hetzner-ax41" })).toBeInTheDocument();
     act(() => history.push("/inbox"));
     const group = await screen.findByTestId("waiting-hosts");
-    await waitFor(() => expect(group).toHaveTextContent("The connection to hetzner-ax41 dropped: connection reset by peer."));
-    expect(group).toHaveTextContent(/Its \d+ sessions keep running there and reattach once you sign in\./);
+    await waitFor(() => expect(group).toHaveTextContent(/hetzner-ax41/));
+    expect(group).not.toHaveTextContent("connection reset by peer");
+    expect(within(group).getByRole("button", { name: "Sign in to gpu-box" })).toBeEnabled();
+    expect(within(group).getByRole("button", { name: "Sign in to hetzner-ax41" })).toBeEnabled();
+    expect(within(group).getByRole("link", { name: "Details on Hosts" })).toHaveAttribute("href", "#/hosts");
     // Its sessions stay listed, as last known.
     expect(document.querySelectorAll('[data-session^="hz/"][data-stale]').length).toBeGreaterThan(0);
     act(() => history.push("/hosts?h=hz"));

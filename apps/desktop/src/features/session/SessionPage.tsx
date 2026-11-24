@@ -4,7 +4,7 @@ import { money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { isTyping } from "../../shortcuts/registry";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { backgroundWords, canInterrupt, endPendingKey, escapeInterrupts, interruptPendingKey, interruptWords, notContinuableWords, phaseWord, selectView, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, usePending, useSessionReach, useSessionView } from "../../state";
+import { backgroundWords, canInterrupt, endPendingKey, escapeInterrupts, interruptPendingKey, interruptWords, notContinuableWords, phaseWord, selectView, sessionVersionState, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, usePending, useSessionReach, useSessionView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, ErrorBoundary, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
 import { ContinueButton } from "../common/SessionBits";
@@ -13,7 +13,8 @@ import { Composer } from "./Composer";
 import { MediaCtx } from "../media/Parts";
 import { SessionFacts } from "./SessionFacts";
 import { SessionWork } from "./SessionWork";
-import { SubagentView } from "./SubagentView";
+import { SubagentStrip, type SubagentFilter } from "./SubagentStrip";
+import { SubagentFoot, SubagentView } from "./SubagentView";
 import { TranscriptList } from "./TranscriptList";
 import { MAIN } from "../../state";
 import { usageSummary } from "./usage";
@@ -59,6 +60,8 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
   const api = useApi();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [subStripOpen, setSubStripOpen] = useState(false);
+  const [subStripFilter, setSubStripFilter] = useState<SubagentFilter | null>(null);
   const saveName = () => {
     const name = renaming?.trim() ?? "";
     setRenaming(null);
@@ -143,7 +146,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
         </div>
         {cont.kind === "blocked" ? <div className="sd-ended" role="status" data-testid="continue-why"><Icon name="stop" size="sm" />{notContinuableWords(cont.why)}</div> : null}
         <div className="sd-meta">
-          <span className="kv">{drv ? <DriverBadge driver={drv} /> : v.driver}{snap.cli_version ? <span className="faint mono">v{snap.cli_version}</span> : null}</span>
+          <span className="kv">{drv ? <DriverBadge driver={drv} /> : v.driver}{snap.cli_version ? <span className="faint mono">v{snap.cli_version}</span> : sessionVersionState(snap, v.stale) === "loading" ? <span className="faint small" role="status" data-testid="session-version-loading">loading…</span> : null}</span>
           {hostLink ? <span className="kv"><HostChip host={hostLink} /><ConnState host={hostLink} /></span> : null}
           {snap.cwd ? <span className="kv"><Icon name="folder" size="sm" /><span className="mono">{snap.cwd}</span></span> : null}
           {v.branch ? <span className="kv"><Icon name="branch" size="sm" /><span className="mono">{v.branch}</span></span> : null}
@@ -167,17 +170,26 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
               {sub ? (
                 <SubagentView sessionKey={key} host={host} id={id} callId={sub} snap={snap} driver={drv} />
               ) : (
-                <>
-                  <TranscriptList sessionKey={key} host={host} id={id} scope={MAIN} driver={drv} followKey={gates.length}>
-                    {gates.map((pg, i) => (
-                      <div key={pg.gate.request_id} id={`gate-${pg.gate.request_id}`}>
-                        <Gate view={v} pg={pg} density="full" active={i === 0} />
-                      </div>
-                    ))}
-                  </TranscriptList>
-                  <Composer sessionKey={key} snap={snap} />
-                </>
+                <TranscriptList sessionKey={key} host={host} id={id} scope={MAIN} driver={drv} followKey={gates.length}>
+                  {gates.map((pg, i) => (
+                    <div key={pg.gate.request_id} id={`gate-${pg.gate.request_id}`}>
+                      <Gate view={v} pg={pg} density="full" active={i === 0} />
+                    </div>
+                  ))}
+                </TranscriptList>
               )}
+              <SubagentStrip
+                sessionKey={key}
+                host={host}
+                id={id}
+                snap={snap}
+                selected={sub}
+                open={subStripOpen}
+                onOpenChange={setSubStripOpen}
+                filter={subStripFilter}
+                onFilterChange={setSubStripFilter}
+              />
+              {sub ? <SubagentFoot snap={snap} callId={sub} /> : <Composer sessionKey={key} snap={snap} />}
             </MediaCtx.Provider>
           </div>
           <aside className="side" aria-label="Session details">
@@ -207,7 +219,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
                 </div>
               </div>
             ) : null}
-            <SessionWork sessionKey={key} host={host} id={id} snap={snap} selected={sub} />
+            <SessionWork sessionKey={key} snap={snap} />
             <SessionFacts snap={snap} />
           </aside>
         </div>

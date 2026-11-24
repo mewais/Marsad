@@ -154,6 +154,26 @@ describe("new session: name", () => {
   });
 });
 
+describe("new session: a folder with more conversations than the engine lists", () => {
+  it("says how many older ones are not listed instead of showing the list as if it were whole", async () => {
+    const user = userEvent.setup();
+    const backend = quietBackend();
+    const { dlg } = await openDialog(user, backend);
+    const folder = within(dlg).getByLabelText("Project folder");
+    await user.clear(folder);
+    await user.type(folder, "~/src/archive");
+    await user.click(within(dlg).getByRole("button", { name: "Continue an existing one" }));
+    await within(dlg).findByRole("listbox", { name: "Sessions to continue" });
+    await waitFor(() => expect(within(dlg).getByText(/340 older ones are not listed/)).toBeInTheDocument());
+    // A folder whose list is whole says nothing of the kind.
+    await user.clear(folder);
+    await user.type(folder, "~/src/ledgerline");
+    await waitFor(() => expect(within(dlg).getByText(/in ~\/src\/ledgerline on /)).toBeInTheDocument());
+    expect(within(dlg).queryByText(/not listed/)).toBeNull();
+    backend.dispose();
+  });
+});
+
 describe("new session: a folder the host refuses", () => {
   it("shows the host's message next to the folder field; the dialog stays open with everything typed, and no toast says it twice", async () => {
     const user = userEvent.setup();

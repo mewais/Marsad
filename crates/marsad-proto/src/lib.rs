@@ -439,10 +439,9 @@ mod tests {
             .chain(wasl_proto::ROUTES)
         {
             for m in HOST_ROUTES.iter().chain(HUB_ROUTES) {
-                assert!(
-                    !r.starts_with(m) && !(m.starts_with(r) && *m != methods::SESSIONS_LAUNCH),
-                    "{r} vs {m}"
-                );
+                let overlaps =
+                    r.starts_with(m) || (m.starts_with(r) && *m != methods::SESSIONS_LAUNCH);
+                assert!(!overlaps, "{r} vs {m}");
             }
         }
     }

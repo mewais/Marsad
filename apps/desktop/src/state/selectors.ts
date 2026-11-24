@@ -33,7 +33,10 @@ export const fleetLive = (s: AppState): boolean => s.hub.state === "connected" &
  * live, or the host has not delivered its session list over its current link (`sessions_live`,
  * which the hub clears when the link drops).
  */
-export const hostStale = (s: AppState, host: HostId): boolean => !fleetLive(s) || !s.hosts[host]?.sessionsLive;
+export const hostStale = (s: AppState, host: HostId): boolean => {
+  const h = s.hosts[host];
+  return !fleetLive(s) || !h?.sessionsLive || !!h?.feedError;
+};
 
 /**
  * Why a request that needs the daemon cannot be made right now, or `null`: the app is not
@@ -178,4 +181,3 @@ export function selectSignInQueue(s: AppState): SignInQuestion[] {
   }
   return out.sort((a, b) => a.prompt.id - b.prompt.id);
 }
-

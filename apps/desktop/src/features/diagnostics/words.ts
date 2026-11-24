@@ -433,6 +433,8 @@ const RECORD_WORDS: Record<string, (f: F) => string> = {
   "session.command_timeout": (f) => `The ${str(f, "kind") ?? "command"} for session ${str(f, "session") ?? "?"} timed out waiting; it may still have been applied`,
   "env.capture": (f) => `Captured the login environment (${str(f, "source") ?? "?"}) in ${ms(f)}`,
   "env.setup": (f) => `The host's setup commands ${f.ok === false ? "failed" : "ran"} in ${ms(f)}`,
+  "inventory.sized": (f) => say(`The inventory entry of ${str(f, "driver") ?? "an agent"} weighs ${bytes(f)}: the biggest part is its ${str(f, "biggest") ?? "?"} (${bytes(f, "biggest_bytes")}), with ${num(nm(f, "sessions"), "session")}, ${num(nm(f, "config"), "configured item")}, ${num(nm(f, "models"), "model")}`, (nm(f, "not_listed") ?? 0) > 0 && `; ${num(nm(f, "not_listed"), "item")} not listed`),
+  "inventory.shed": (f) => `The inventory entry of ${str(f, "driver") ?? "an agent"} was ${bytes(f)}, over its ${bytes(f, "budget")} budget: ${num(nm(f, "shed"), "item")} left out to fit`,
   "session.lost": (f) => `Session ${str(f, "session") ?? "?"} lost its process${tail(err(f))}`,
   "session.retry": (f) => `Reconnecting to the process of session ${str(f, "session") ?? "?"} — attempt ${f.attempt ?? "?"}${tail(err(f))}`,
   "session.op_failed": (f) => `${str(f, "op") ?? "An operation"} on session ${str(f, "session") ?? "?"} failed${tail(err(f))}`,

@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionSnapshot } from "../../src/bridge/wire";
 import { createTranscriptFold } from "../../src/features/session/transcript";
@@ -54,13 +55,18 @@ describe("session sidebar: what the Usage tab used to show", () => {
     expect(el.getByText("Cost by model")).toBeInTheDocument();
   });
 
-  it("lists the subagents (the Usage tab's table) in the sidebar", async () => {
+  it("moves subagents out of the sidebar into the expandable strip above the composer", async () => {
+    const user = userEvent.setup();
     const backend = quietBackend();
     const s = [...backend.hostIds()].flatMap((h) => backend.sessionIds(h).map((id) => ({ h, id }))).find(({ h, id }) => backend.snapshot(h, id).subagents.length)!;
     expect(s).toBeDefined();
-    const r = await renderApp(`/session/${s.h}/${s.id}`, backend);
-    void r;
-    const list = await screen.findByTestId("side-subagents");
+    await renderApp(`/session/${s.h}/${s.id}`, backend);
+    const toggle = await screen.findByTestId("subagent-strip-toggle");
+    expect(within(side()).queryByTestId("side-subagents")).toBeNull();
+    expect(within(side()).queryByText(/^Subagents/)).toBeNull();
+    expect(toggle).toHaveTextContent("Subagents · 1 finished");
+    await user.click(toggle);
+    const list = screen.getByTestId("subagent-strip-list");
     expect(list).toHaveTextContent("Explore");
     expect(list).toHaveTextContent("Finished");
   });
@@ -81,6 +87,18 @@ describe("one cache percentage", () => {
     // A live report older than the totals does not win.
     const behind = { ...base, live_usage: { input_tokens: 10, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.1 } } as SessionSnapshot;
     expect(usageSummary(behind).cost).toBe(1);
+  });
+
+  it("a cost-only live report (Kilo: cost before its token counts catch up) is shown once its cost is ahead of the totals", () => {
+    const base = { usage: { input_tokens: 100, output_tokens: 10, cache_read_tokens: 100, cache_creation_tokens: 100, cost_usd: 1 }, turns_completed: 2, capabilities: { cost: true, usage: true }, context_pct: 30 } as unknown as SessionSnapshot;
+    const costOnly = { ...base, live_usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 1.25 } } as SessionSnapshot;
+    expect(usageSummary(costOnly)).toMatchObject({ cost: 1.25 });
+    // Equal cost is not behind: it is the same figure, and the live report wins as the newer one.
+    const equal = { ...base, live_usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 1 } } as SessionSnapshot;
+    expect(usageSummary(equal).cost).toBe(1);
+    // A cost below the totals, with no tokens caught up, is still behind.
+    const lower = { ...base, live_usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.5 } } as SessionSnapshot;
+    expect(usageSummary(lower)).toMatchObject({ cost: 1, promptTokens: 300 });
   });
 
   it("says when the agent does not report cost or usage instead of showing zeros", async () => {

@@ -4,6 +4,7 @@
 //! daemon (`ask.user`): a question gate on the calling session, shown and answered like a
 //! native question, whose answer is the tool's result.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,18 +16,87 @@ use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, S
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use serde::Deserialize;
+use tokio::time::Instant;
 use wasit_control::{
     connector, local_endpoint, CallError, ClientOptions, ControlClient, Hello, RequestOpts,
     Supervised, SupervisedOptions,
 };
 use wasit_core::{McpServerConfig, McpTransport, QuestionOption, QuestionPrompt};
 
+use crate::host::ask::ANSWER_DEADLINE;
+
 /// Name of the MCP server as agents see it (the tool appears as `marsad_ask_user` in
 /// OpenCode / Kilo).
 pub const SERVER_NAME: &str = "marsad";
-/// How long a question waits for the user.
-const ANSWER_DEADLINE: Duration = Duration::from_secs(24 * 3600);
-const WAIT_CONNECTED: Duration = Duration::from_secs(30);
+
+/// The link the `ask.user` calls go over: the supervised daemon link in production, a fake in
+/// tests.
+pub trait AskLink: Sync {
+    /// Wait up to `max` for a live connection. Event-driven: returns as soon as one is up.
+    fn connected(&self, max: Duration) -> impl Future<Output = Result<(), CallError>> + Send;
+    /// One `ask.user` call over the live connection, bounded by `deadline`.
+    fn send(
+        &self,
+        req: &AskUserRequest,
+        deadline: Duration,
+    ) -> impl Future<Output = Result<AskUserReply, CallError>> + Send;
+}
+
+impl AskLink for Supervised {
+    async fn connected(&self, max: Duration) -> Result<(), CallError> {
+        self.wait_connected(max).await.map(|_| ())
+    }
+
+    async fn send(
+        &self,
+        req: &AskUserRequest,
+        deadline: Duration,
+    ) -> Result<AskUserReply, CallError> {
+        let client = self.current().ok_or(CallError::NotConnected)?;
+        client
+            .request_with(methods::ASK_USER, req, RequestOpts::new(deadline))
+            .await
+    }
+}
+
+/// Asks `req` until the user answers or `deadline` passes. A lost connection is waited out (for
+/// the link to come back), not counted: each attempt re-sends the same request id, so the daemon
+/// waits for the gate it already raised instead of asking twice. The error text is what the
+/// agent is told when the deadline passes, naming what was last wrong.
+pub async fn ask_until_answered<L: AskLink>(
+    link: &L,
+    req: &AskUserRequest,
+    deadline: Duration,
+) -> Result<AskUserReply, String> {
+    const LOST: &str = "the connection to Marsad was lost and not restored in time";
+    const SILENT: &str = "Marsad did not answer in time";
+    let until = Instant::now() + deadline;
+    let mut last = SILENT;
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(format!("no answer within {deadline:?}; {last}"));
+        }
+        if let Err(e) = link.connected(left).await {
+            // `connected` only fails at its own limit (the deadline) or when the link is stopped.
+            if Instant::now() < until {
+                return Err(format!("the link to Marsad stopped ({e})"));
+            }
+            last = LOST;
+            continue;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        match link.send(req, left).await {
+            Ok(reply) => return Ok(reply),
+            Err(CallError::ConnectionLost(_) | CallError::NotConnected) => last = LOST,
+            Err(CallError::Timeout) => {
+                return Err(format!("no answer within {deadline:?}; {SILENT}"))
+            }
+            Err(CallError::Rpc(e)) => return Err(e.message),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
 
 /// The MCP server item for a session (`program` is the daemon binary).
 pub fn mcp_server_config(program: &str, socket: &str, session: &str) -> McpServerConfig {
@@ -150,28 +220,7 @@ impl AskMcp {
             request_id: format!("ask-{:016x}", fastrand::u64(..)),
             question,
         };
-        // The same request id on a retry: the daemon waits for the gate it already raised.
-        let mut attempts = 0;
-        let reply: Result<AskUserReply, String> = loop {
-            attempts += 1;
-            let r: Result<AskUserReply, CallError> = self
-                .link
-                .request(
-                    methods::ASK_USER,
-                    &req,
-                    RequestOpts::new(ANSWER_DEADLINE),
-                    WAIT_CONNECTED,
-                )
-                .await;
-            match r {
-                Ok(v) => break Ok(v),
-                Err(CallError::ConnectionLost(_) | CallError::NotConnected) if attempts < 5 => {
-                    continue
-                }
-                Err(CallError::Rpc(e)) => break Err(e.message),
-                Err(e) => break Err(e.to_string()),
-            }
-        };
+        let reply = ask_until_answered(&self.link, &req, ANSWER_DEADLINE).await;
         Ok(match reply {
             Ok(AskUserReply {
                 cancelled: Some(why),
@@ -337,6 +386,127 @@ mod tests {
         assert!(c.trusted);
         assert!(
             matches!(c.transport, McpTransport::Stdio { ref args, .. } if args[0] == "ask-mcp")
+        );
+    }
+
+    /// A link that plays a script of `send` results. `up` says whether `connected` succeeds at
+    /// once; when it does not, `connected` waits out its limit, as the real link does.
+    struct FakeLink {
+        up: bool,
+        script: std::sync::Mutex<std::collections::VecDeque<Result<AskUserReply, CallError>>>,
+        log: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeLink {
+        fn new(up: bool, script: Vec<Result<AskUserReply, CallError>>) -> FakeLink {
+            FakeLink {
+                up,
+                script: std::sync::Mutex::new(script.into()),
+                log: Default::default(),
+            }
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl AskLink for FakeLink {
+        async fn connected(&self, max: Duration) -> Result<(), CallError> {
+            self.log.lock().unwrap().push("connected".into());
+            if self.up {
+                return Ok(());
+            }
+            tokio::time::sleep(max).await;
+            Err(CallError::NotConnected)
+        }
+
+        async fn send(
+            &self,
+            req: &AskUserRequest,
+            _deadline: Duration,
+        ) -> Result<AskUserReply, CallError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("send {}", req.request_id));
+            self.script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(CallError::Timeout))
+        }
+    }
+
+    fn ask_request() -> AskUserRequest {
+        AskUserRequest {
+            session: "abcdefghijkl".into(),
+            request_id: "ask-0123456789abcdef".into(),
+            question: args(None, &["a", "b"]).prompt().unwrap(),
+        }
+    }
+
+    fn answered(label: &str) -> AskUserReply {
+        AskUserReply {
+            answers: vec![label.into()],
+            cancelled: None,
+        }
+    }
+
+    fn dropped() -> CallError {
+        CallError::ConnectionLost(wasit_control::ConnClose::Eof)
+    }
+
+    #[tokio::test]
+    async fn a_call_is_re_sent_with_its_request_id_after_the_connection_drops() {
+        let link = FakeLink::new(true, vec![Err(dropped()), Ok(answered("b"))]);
+        let reply = ask_until_answered(&link, &ask_request(), Duration::from_secs(60))
+            .await
+            .expect("the owner's answer");
+        assert_eq!(reply.answers, ["b"]);
+        // The retry waited for the link to be connected again before it was sent.
+        assert_eq!(
+            link.log(),
+            [
+                "connected",
+                "send ask-0123456789abcdef",
+                "connected",
+                "send ask-0123456789abcdef",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn drops_are_not_counted_only_the_deadline_ends_the_wait() {
+        let mut script: Vec<_> = (0..7).map(|_| Err(dropped())).collect();
+        script.push(Ok(answered("a")));
+        let link = FakeLink::new(true, script);
+        let reply = ask_until_answered(&link, &ask_request(), Duration::from_secs(60))
+            .await
+            .expect("the owner's answer after seven drops");
+        assert_eq!(reply.answers, ["a"]);
+        assert_eq!(
+            link.log().iter().filter(|l| l.starts_with("send")).count(),
+            8
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_is_reported_only_when_the_deadline_passes() {
+        let link = FakeLink::new(false, vec![]);
+        let started = Instant::now();
+        let deadline = Duration::from_millis(150);
+        let err = ask_until_answered(&link, &ask_request(), deadline)
+            .await
+            .expect_err("no link, so no answer");
+        assert!(started.elapsed() >= deadline, "gave up before the deadline");
+        assert_eq!(
+            err,
+            "no answer within 150ms; the connection to Marsad was lost and not restored in time"
+        );
+        assert!(
+            link.log().iter().all(|l| l == "connected"),
+            "nothing was sent without a connection: {:?}",
+            link.log()
         );
     }
 }

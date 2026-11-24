@@ -210,7 +210,8 @@ export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
       if (from == null || live.get(key) !== entry) return started(false);
       entry.last = from;
       // Started again (if it ends) from wherever the subscription has got to.
-      entry.off = feeds.open(`events:${key}`, (onEnd) => api.subscribe.sessionEvents(host, id, entry.last, (e) => deliver(key, entry, e), onEnd));
+      // Its host's: started again when that host's link comes back, not only when the hub's does.
+      entry.off = feeds.open(`events:${key}`, (onEnd) => api.subscribe.sessionEvents(host, id, entry.last, (e) => deliver(key, entry, e), onEnd), host);
       started(true);
       void reconcile(key, key, MAIN);
     })();

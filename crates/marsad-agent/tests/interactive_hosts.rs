@@ -1494,3 +1494,136 @@ async fn signing_out_ends_the_connection_and_the_host_waits_and_is_not_retried()
     let window = r.window(from).await;
     assert_eq!(evs(&window, "pp", "ssh.signin_started").len(), 1);
 }
+
+/// A sign-out that happens while ssh is still signing in (its connection held by a proxy
+/// command the test releases) does not let that sign-in land: the master it would have opened is
+/// ended and the host stays signed out, with no socket left behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::AsyncWriteExt;
+
+    let mut r = Rig::new().await;
+
+    // A proxy command that waits on `fifo` before connecting to the sshd: the sign-in attempt is
+    // in flight but has not reached the host yet.
+    let fifo = r.d.path().join("hold-fifo");
+    let _ = std::fs::remove_file(&fifo);
+    let st = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo");
+    assert!(st.success(), "mkfifo failed: {st:?}");
+    // Open both ends so the proxy's `cat` starts without blocking this task; closing it later
+    // delivers EOF.
+    let mut hold = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .await
+        .expect("open fifo");
+    let proxy = r.d.path().join("proxy.sh");
+    std::fs::write(
+        &proxy,
+        format!(
+            "#!/bin/sh\ncat \"{}\"\nexec nc 127.0.0.1 {}\n",
+            fifo.display(),
+            r.sshd.port
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&proxy, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut kind = r.sshd.kind(&r.sshd.key);
+    let HostKind::Ssh { options, .. } = &mut kind else {
+        unreachable!()
+    };
+    options.push(format!(
+        "ProxyCommand={} {} {}",
+        proxy.display(),
+        fifo.display(),
+        r.sshd.port
+    ));
+    r.add(kind).await;
+
+    // Wait until the sign-in attempt is running (so a sign-out does not prevent it from
+    // starting), then sign out while it is held in the proxy.
+    let _ = r
+        .tail
+        .until("ssh sign-in started", |rec| {
+            rec["ev"] == "ssh.signin_started" && about(rec, "pp")
+        })
+        .await;
+    // While the sign-in is blocked, the user signs out.
+    r.c.sign_out_host(&r.id).await.unwrap();
+    let from = r.marker().await;
+
+    // Release the proxy and let the in-flight ssh finish.
+    hold.write_all(b"go\n").await.unwrap();
+    drop(hold);
+
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded { detail, held, .. } = state else {
+        unreachable!()
+    };
+    assert!(held, "the host waits for the user after sign-out");
+    assert!(detail.contains("signed out"), "{detail:?}");
+
+    // No master survived (no socket, no pid), and its attempted exit is on record.
+    assert!(master_pid(&r.master()).is_none());
+    assert!(!r.master().exists());
+    let window = r.window(from).await;
+    assert_eq!(
+        evs(&window, "pp", "ssh.master_exit")
+            .iter()
+            .map(|e| (&e["why"], &e["outcome"]))
+            .collect::<Vec<_>>(),
+        [(&json!("signed_out"), &json!("ended"))],
+        "{window:#?}"
+    );
+}
+
+/// A signed-out host stays signed out across a hub restart: the restarted hub does not reconnect
+/// it on its own, and an explicit reconnect clears the flag and opens a new master.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_signed_out_host_stays_signed_out_across_a_restart() {
+    let mut r = Rig::new().await;
+    r.connect_key_host().await;
+    let id = r.id.clone();
+    let sock = r.master();
+    let pid = r.master_pid();
+
+    r.c.sign_out_host(&id).await.unwrap();
+    gone(pid).await;
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded { detail, held, .. } = state else {
+        unreachable!()
+    };
+    assert!(held && detail.contains("signed out"), "{detail:?}");
+    assert!(master_pid(&sock).is_none());
+    assert!(!sock.exists());
+
+    // Restart the hub: the signed-out flag is loaded and keeps the host parked.
+    let mut r = r.restart_hub().await;
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded { detail, held, .. } = state else {
+        unreachable!()
+    };
+    assert!(held && detail.contains("signed out"), "{detail:?}");
+    assert!(master_pid(&r.master()).is_none());
+    assert!(!r.master().exists());
+
+    // An explicit reconnect clears the signed-out flag and opens a new master.
+    r.c.reconnect_host(&id).await.unwrap();
+    until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
+    assert!(master_pid(&r.master()).is_some());
+}

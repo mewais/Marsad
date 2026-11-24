@@ -5,8 +5,10 @@
 //! Replay and resume follow [`super::ring`].
 //!
 //! Each host's session feed records its life (`fleet.feed`: started, lagged, undecodable event,
-//! ended with the service's error code): a feed that ends leaves the host's sessions as they
-//! last were, so the end must be on record.
+//! refused with the service's error code). A refused feed is not the end of the host's feed: the
+//! host's sessions stay as they last were, marked with a [`FleetEvent::FeedError`] the app shows,
+//! and the feed resubscribes (a fresh snapshot, so the sessions are live again) when the host's
+//! link next connects.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -15,8 +17,11 @@ use marsad_proto::diag::{FeedEvent, MarsadEvent};
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink, GitSummary};
 use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::{HostId, LinkState};
-use tokio::sync::{broadcast, mpsc, oneshot};
-use wasit_control::{Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use wasit_control::{
+    CloseReason, ControlClient, Cursor, EventStream, Hub, RpcError, SubscribeOpts, Subscription,
+    Supervised,
+};
 use wasit_diag::{ErrorInfo, Ident};
 use wasit_runtime::wire::{topics as rt_topics, HostEvent, SessionSnapshot};
 use wasit_runtime::{SessionManager, StreamEnd};
@@ -27,6 +32,8 @@ use super::ring::{self, Joined, Ring};
 use crate::diag::{self, emit};
 
 const INPUT_QUEUE: usize = 1024;
+/// Bound on each subscribe round trip of a [`Follow`].
+const SUBSCRIBE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// `fleet.feed` for `host`.
 fn feed_record(host: &HostId, event: FeedEvent, error: Option<ErrorInfo>) {
@@ -37,11 +44,140 @@ fn feed_record(host: &HostId, event: FeedEvent, error: Option<ErrorInfo>) {
     });
 }
 
+/// What a [`Follow`] delivers.
+pub(super) enum Step {
+    /// One event.
+    Event(serde_json::Value),
+    /// The service refused the subscription. The follow goes on: its next subscribe waits for the
+    /// link's next change.
+    Refused(RpcError),
+}
+
+/// Follows one topic over a supervised link for as long as the caller asks for events.
+///
+/// It subscribes only while the link is up (`up` says so for the state it watches, and a live
+/// client is there): nothing is asked of a host that is down, so no request is made that can only
+/// fail. A subscription ends with its connection or with the service's verdict; either way the next
+/// subscribe waits for the next change of the link state (event-driven, no timers). With
+/// `reset_on_connect` the next subscribe starts from the beginning, so the service sends a full
+/// snapshot first; otherwise it resumes from the last cursor.
+pub(super) struct Follow<T> {
+    link: Supervised,
+    topic: &'static str,
+    host: Option<HostId>,
+    state: watch::Receiver<T>,
+    up: fn(&T) -> bool,
+    reset_on_connect: bool,
+    last: Option<Cursor>,
+    sub: Option<Subscription>,
+    /// The next call waits for a change of the state before subscribing.
+    await_change: bool,
+    /// The next subscribe starts from the beginning.
+    fresh: bool,
+}
+
+impl<T> Follow<T> {
+    pub(super) fn new(
+        link: Supervised,
+        topic: &'static str,
+        host: Option<HostId>,
+        state: watch::Receiver<T>,
+        up: fn(&T) -> bool,
+        reset_on_connect: bool,
+    ) -> Self {
+        Follow {
+            link,
+            topic,
+            host,
+            state,
+            up,
+            reset_on_connect,
+            last: None,
+            sub: None,
+            await_change: false,
+            fresh: reset_on_connect,
+        }
+    }
+
+    /// The next event or refusal; `None` once the state can no longer change (its owner is gone).
+    pub(super) async fn next(&mut self) -> Option<Step> {
+        loop {
+            if std::mem::take(&mut self.await_change) {
+                self.state.changed().await.ok()?;
+            }
+            if self.sub.is_none() {
+                let client = self.connected_client().await?;
+                let from = if self.fresh { None } else { self.last.clone() };
+                let mut opts = SubscribeOpts::new(SUBSCRIBE_DEADLINE).from(from);
+                opts.host = self.host.clone();
+                match client.subscribe_with(self.topic, opts).await {
+                    Ok(sub) => {
+                        self.sub = Some(sub);
+                        self.fresh = false;
+                    }
+                    Err(e) => {
+                        let retryable = e.is_retryable();
+                        self.lost();
+                        if retryable {
+                            self.link.reconnect_now();
+                            continue;
+                        }
+                        return Some(Step::Refused(e.into_rpc()));
+                    }
+                }
+            }
+            let Some(sub) = self.sub.as_mut() else {
+                continue;
+            };
+            match sub.next().await {
+                Some((c, v)) => {
+                    self.last = Some(c.clone());
+                    return Some(Step::Event(v));
+                }
+                None => {
+                    let reason = sub.close_reason().cloned().unwrap_or(CloseReason::HostLost);
+                    self.sub = None;
+                    match reason {
+                        // Resume from the last cursor at once: the link is still up.
+                        CloseReason::Lagged => {}
+                        CloseReason::Ended | CloseReason::HostLost => self.lost(),
+                        CloseReason::Error { error } => {
+                            self.lost();
+                            return Some(Step::Refused(error));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The subscription is over: the next one waits for a change of the link.
+    fn lost(&mut self) {
+        self.await_change = true;
+        self.fresh = self.reset_on_connect;
+    }
+
+    /// A client of the link, once the link is up (waits for it otherwise).
+    async fn connected_client(&mut self) -> Option<ControlClient> {
+        loop {
+            let up = (self.up)(&*self.state.borrow_and_update());
+            if up {
+                if let Some(client) = self.link.current() {
+                    return Some(client);
+                }
+            }
+            self.state.changed().await.ok()?;
+        }
+    }
+}
+
 enum Input {
     HostUpserted(Box<HostEntry>, FleetLink),
     HostRemoved(HostId),
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
+    /// A host's session feed was refused (`Some`, why) or delivered its sessions again (`None`).
+    FeedError(HostId, Option<String>),
     /// A prompt is shown for the host.
     PromptShown(HostId, Box<AuthPrompt>),
     /// The prompt with this id is over: taken off the host if it is the one showing (a newer
@@ -91,12 +227,21 @@ impl State {
             Input::HostUpserted(entry, link) => {
                 let entry = *entry;
                 let id = entry.id.clone();
-                match self.hosts.get_mut(&id) {
-                    Some(h) => h.host = entry.clone(),
+                // The link a host is first seen with is announced right after it: a link event
+                // that came before the host was known was not kept.
+                let announce = match self.hosts.get_mut(&id) {
+                    Some(h) => {
+                        h.host = entry.clone();
+                        None
+                    }
                     None => {
                         let live = matches!(link, FleetLink::Local);
+                        let announce = match &link {
+                            FleetLink::Local => None,
+                            FleetLink::Remote { state } => Some(state.clone()),
+                        };
                         self.hosts.insert(
-                            id,
+                            id.clone(),
                             FleetHost {
                                 host: entry.clone(),
                                 link,
@@ -104,11 +249,16 @@ impl State {
                                 sessions: Vec::new(),
                                 auth_prompt: None,
                                 git: Vec::new(),
+                                feed_error: None,
                             },
                         );
+                        announce
                     }
-                }
+                };
                 self.emit(FleetEvent::HostUpserted { host: entry });
+                if let Some(state) = announce {
+                    self.emit(FleetEvent::Link { host: id, state });
+                }
             }
             Input::HostRemoved(id) => {
                 if self.hosts.remove(&id).is_some() {
@@ -158,7 +308,18 @@ impl State {
                     HostEvent::Reset { sessions } => {
                         h.sessions = sessions.clone();
                         h.sessions_live = true;
-                        self.emit(FleetEvent::Sessions { host: id, sessions });
+                        // A snapshot is what a refused feed gets back: the refusal is over.
+                        let recovered = h.feed_error.take().is_some();
+                        self.emit(FleetEvent::Sessions {
+                            host: id.clone(),
+                            sessions,
+                        });
+                        if recovered {
+                            self.emit(FleetEvent::FeedError {
+                                host: id,
+                                error: None,
+                            });
+                        }
                     }
                     HostEvent::Upsert { session } => {
                         match h.sessions.iter_mut().find(|s| s.id == session.id) {
@@ -172,6 +333,19 @@ impl State {
                         self.emit(FleetEvent::SessionRemoved { host: id, id: sid });
                     }
                 }
+            }
+            Input::FeedError(id, error) => {
+                let Some(h) = self.hosts.get_mut(&id) else {
+                    return;
+                };
+                if h.feed_error == error {
+                    return;
+                }
+                if error.is_some() {
+                    h.sessions_live = false;
+                }
+                h.feed_error = error.clone();
+                self.emit(FleetEvent::FeedError { host: id, error });
             }
             Input::PromptShown(id, prompt) => {
                 let Some(h) = self.hosts.get_mut(&id) else {
@@ -344,21 +518,24 @@ impl Fleet {
         })
     }
 
-    /// Feed a remote host's `host.sessions` over its supervised link.
+    /// Feed a remote host's `host.sessions` over its supervised link, for as long as the host is
+    /// known (see [`Follow`]). A refusal is recorded and shown; the feed resubscribes when the
+    /// link next connects, and that subscription starts with a snapshot.
     pub fn feed_remote(&self, host: HostId, link: Supervised) -> tokio::task::JoinHandle<()> {
         let fleet = self.clone();
+        let mut follow = Follow::new(
+            link.clone(),
+            rt_topics::HOST_SESSIONS,
+            None,
+            link.state(),
+            LinkState::is_connected,
+            true,
+        );
         tokio::spawn(async move {
-            let mut sub = link.subscribe_durable(
-                rt_topics::HOST_SESSIONS,
-                DurableOpts {
-                    subscribe_deadline: Duration::from_secs(30),
-                    ..DurableOpts::default()
-                },
-            );
             feed_record(&host, FeedEvent::Started, None);
-            while let Some(item) = sub.next().await {
-                match item {
-                    Ok((_, v)) => match serde_json::from_value::<HostEvent>(v) {
+            while let Some(step) = follow.next().await {
+                match step {
+                    Step::Event(v) => match serde_json::from_value::<HostEvent>(v) {
                         Ok(ev) => fleet.send(Input::Feed(host.clone(), ev)).await,
                         // The event is dropped; the text quotes the host's JSON.
                         Err(e) => feed_record(
@@ -367,20 +544,22 @@ impl Fleet {
                             Some(diag::foreign("decode", &e.to_string())),
                         ),
                     },
-                    Err(e) => {
-                        // A refusal the service will repeat (a non-retryable subscribe error):
-                        // the feed is over and the fleet no longer follows this host's
-                        // sessions. Recorded, not retried: nothing a retry could change.
+                    Step::Refused(e) => {
                         feed_record(
                             &host,
                             FeedEvent::Ended,
                             Some(diag::foreign(&e.code, &e.message)),
                         );
-                        return;
+                        fleet
+                            .send(Input::FeedError(
+                                host.clone(),
+                                Some(format!("{}: {}", e.code, e.message)),
+                            ))
+                            .await;
                     }
                 }
             }
-            // The link was stopped (its host removed or the hub shutting down) or the topic ended.
+            // The link's state can no longer change (its supervisor is gone).
             feed_record(&host, FeedEvent::Ended, None);
         })
     }
@@ -388,8 +567,15 @@ impl Fleet {
     /// Forward the hub's link state changes (re-reading all states after a lag).
     pub fn feed_links(&self, hub: Hub) -> tokio::task::JoinHandle<()> {
         let fleet = self.clone();
+        // Subscribed here, not in the task: no change between this call and the task's start is
+        // missed.
+        let mut rx = hub.events();
         tokio::spawn(async move {
-            let mut rx = hub.events();
+            // The states as they are now (a link may have connected before this feed started).
+            let states = hub.states().borrow().clone();
+            for (h, s) in states {
+                fleet.send(Input::Link(h, s)).await;
+            }
             loop {
                 match rx.recv().await {
                     Ok(ev) => {

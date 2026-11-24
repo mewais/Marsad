@@ -75,6 +75,9 @@ struct HostMaster {
     /// Why the connection was found ended, in ssh's words (empty: ssh wrote nothing), until the
     /// next sign-in begins.
     ended: Option<String>,
+    /// A counter bumped at every sign-out: a sign-in that began under an older generation ends
+    /// its own master instead of keeping it.
+    generation: u64,
 }
 
 struct Inner {
@@ -183,6 +186,16 @@ impl Masters {
         self.with(host, |h| h.signed_out = on);
     }
 
+    /// The user signed out: record it and bump the host's generation so that in-flight sign-ins
+    /// started before it end their own master.
+    pub fn mark_signed_out(&self, host: &HostId) {
+        self.with(host, |h| {
+            h.signed_out = true;
+            h.generation = h.generation.wrapping_add(1);
+            h.alive = false;
+        });
+    }
+
     pub fn signed_out(&self, host: &HostId) -> bool {
         locked(&self.inner.hosts)
             .get(host)
@@ -208,20 +221,27 @@ impl Masters {
     /// A sign-in step is about to start: the log of the connection before it is no longer
     /// wanted and what was found about its end is told. A log that cannot be removed is
     /// recorded, and the step goes on (ssh appends to what is there).
-    pub async fn begin_signin(&self, entry: &HostEntry, control: &Path) {
-        self.with(&entry.id, |h| {
+    pub async fn begin_signin(&self, entry: &HostEntry, control: &Path) -> u64 {
+        let generation = self.with(&entry.id, |h| {
             h.ended = None;
             h.alive = false;
+            h.generation
         });
         remove_file(&entry.id, &master_log(control)).await;
+        generation
     }
 
     /// A sign-in step ended with the connection open.
-    pub fn signed_in(&self, host: &HostId) {
+    pub fn signed_in(&self, host: &HostId, started: u64) -> bool {
         self.with(host, |h| {
-            h.alive = true;
-            h.signed_out = false;
-        });
+            if h.generation == started {
+                h.alive = true;
+                h.signed_out = false;
+                true
+            } else {
+                false
+            }
+        })
     }
 
     /// What a failed sign-in step wrote to the connection's log (ssh's messages go there, not to

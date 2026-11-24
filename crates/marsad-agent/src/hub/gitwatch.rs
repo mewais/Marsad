@@ -10,13 +10,14 @@
 //! is never asked again.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
 
 use marsad_proto::fleet::GitSummary;
 use marsad_proto::git::{GitStatus, GitStatusRequest, GitTarget};
 use marsad_proto::{methods, HostId, MarsadError};
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
+use tokio::task::{Id, JoinSet};
 use tokio::time::Instant;
 use wasit_control::{RequestOpts, Supervised};
 
@@ -51,7 +52,14 @@ impl GitWatch {
     /// host) and reports to `fleet`.
     pub fn spawn(link: Supervised, fleet: Fleet) -> GitWatch {
         let (tx, rx) = mpsc::channel(QUEUE);
-        tokio::spawn(run(link, fleet, rx));
+        tokio::spawn(run(
+            move |(host, cwd): Key| {
+                let link = link.clone();
+                async move { summarize(&link, &host, &cwd).await }
+            },
+            fleet,
+            rx,
+        ));
         GitWatch { tx }
     }
 
@@ -65,9 +73,17 @@ impl GitWatch {
     }
 }
 
-async fn run(link: Supervised, fleet: Fleet, mut rx: mpsc::Receiver<Key>) {
+/// The actor. `summarize` is the `git.status` call in production; tests substitute their own.
+async fn run<S, Fut>(summarize: S, fleet: Fleet, mut rx: mpsc::Receiver<Key>)
+where
+    S: Fn(Key) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = GitSummary> + Send + 'static,
+{
     let mut dirs: HashMap<Key, Dir> = HashMap::new();
     let mut inflight: JoinSet<(Key, GitSummary)> = JoinSet::new();
+    // The directory of each running refresh, by task id. A panicking refresh returns no key, so
+    // this is how its directory is found again.
+    let mut running: HashMap<Id, Key> = HashMap::new();
     loop {
         // Start what may start now; find when the next deferred refresh is due.
         let now = Instant::now();
@@ -93,11 +109,13 @@ async fn run(link: Supervised, fleet: Fleet, mut rx: mpsc::Receiver<Key>) {
             let d = dirs.get_mut(&k).expect("listed above");
             d.dirty = false;
             d.running = true;
-            let link = link.clone();
-            inflight.spawn(async move {
-                let s = summarize(&link, &k.0, &k.1).await;
-                (k, s)
+            let summarize = summarize.clone();
+            let key = k.clone();
+            let task = inflight.spawn(async move {
+                let s = summarize(key.clone()).await;
+                (key, s)
             });
+            running.insert(task.id(), k);
         }
         let timer = async {
             match next_due {
@@ -122,20 +140,32 @@ async fn run(link: Supervised, fleet: Fleet, mut rx: mpsc::Receiver<Key>) {
                     }
                 }
             }
-            Some(done) = inflight.join_next(), if !inflight.is_empty() => {
+            Some(done) = inflight.join_next_with_id(), if !inflight.is_empty() => {
                 match done {
-                    Ok((k, summary)) => {
-                        if let Some(d) = dirs.get_mut(&k) {
-                            d.running = false;
-                            d.last_run = Some(Instant::now());
-                        }
+                    Ok((id, (k, summary))) => {
+                        running.remove(&id);
+                        finish(&mut dirs, &k);
                         fleet.git_summary(k.0, summary).await;
                     }
-                    Err(e) => hub_events::git_summary_failed(&e),
+                    Err(e) => {
+                        hub_events::git_summary_failed(&e);
+                        if let Some(k) = running.remove(&e.id()) {
+                            finish(&mut dirs, &k);
+                        }
+                    }
                 }
             }
             _ = timer => {}
         }
+    }
+}
+
+/// A refresh ended, with a result or a panic: the directory may run again once [`MIN_INTERVAL`]
+/// has passed since then. A touch that arrived meanwhile is already marked dirty.
+fn finish(dirs: &mut HashMap<Key, Dir>, k: &Key) {
+    if let Some(d) = dirs.get_mut(k) {
+        d.running = false;
+        d.last_run = Some(Instant::now());
     }
 }
 
@@ -185,4 +215,60 @@ async fn summarize(link: &Supervised, host: &HostId, cwd: &str) -> GitSummary {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn summary(cwd: &str) -> GitSummary {
+        GitSummary {
+            cwd: cwd.to_string(),
+            repo_root: None,
+            branch: None,
+            ahead: 0,
+            behind: 0,
+            files: 0,
+            added: 0,
+            removed: 0,
+            refreshed_at_ms: 0,
+            error: None,
+        }
+    }
+
+    /// The first refresh panics. The directory is touched again right away; it must be refreshed
+    /// again (the second summarizer call) rather than stay marked as running for good.
+    #[tokio::test]
+    async fn a_panicking_refresh_frees_its_directory_for_a_later_touch() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (done_tx, mut done) = mpsc::unbounded_channel::<()>();
+        let (tx, rx) = mpsc::channel(QUEUE);
+        let calls = attempts.clone();
+        tokio::spawn(run(
+            move |(_, cwd): Key| {
+                let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let done_tx = done_tx.clone();
+                async move {
+                    if n == 1 {
+                        panic!("summary panicked on purpose");
+                    }
+                    let _ = done_tx.send(());
+                    summary(&cwd)
+                }
+            },
+            Fleet::spawn(),
+            rx,
+        ));
+        let key = (HostId::new("box"), "/work/repo".to_string());
+        tx.send(key.clone()).await.unwrap();
+        tx.send(key).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(15), done.recv())
+            .await
+            .expect("the directory was refreshed again after the panic")
+            .expect("the refresh reported");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
 }

@@ -26,3 +26,9 @@ export function address(e: HostEntry): string {
   const k = e.kind;
   return k.kind === "local" ? "this machine" : k.kind === "ssh" ? `${k.target}${k.port ? `:${k.port}` : ""}` : `WSL ${k.distro}`;
 }
+
+/** A feed refusal's text as one short clause: no line breaks, no trailing full stop, no dump. */
+export function feedReason(text: string): string {
+  const one = text.replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
+  return one.length > 160 ? `${one.slice(0, 157)}…` : one;
+}

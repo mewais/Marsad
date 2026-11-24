@@ -11,6 +11,7 @@ export type BaseConfig = { driver: DriverId, project?: string | null, items: Arr
  */
 refreshing: boolean, 
 /**
- * Probe failures (each also leaves its items out).
+ * Probe failures (each also leaves its items out), and a note when the list was shortened
+ * (more items than the engine lists).
  */
 errors: Array<string>, refreshed_at_ms: number, };

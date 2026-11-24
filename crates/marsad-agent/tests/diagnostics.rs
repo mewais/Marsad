@@ -2533,9 +2533,9 @@ mod connect {
 
 // ── a session feed that ends ─────────────────────────────────────────────────
 
-/// A host whose daemon refuses the `host.sessions` subscription for good (an old daemon that
-/// does not know the topic): the feed ends, and it is on record, with the service's code. (The
-/// fleet then no longer follows the host's sessions: recorded here, not retried.)
+/// A host whose daemon refuses the `host.sessions` subscription (an old daemon that does not know
+/// the topic): the refusal is on record with the service's code and shown as the host's feed
+/// error. The feed does not end: it waits for the host's link to connect again.
 #[tokio::test]
 async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
     use marsad_agent::hub::fleet::Fleet;
@@ -2571,12 +2571,48 @@ async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
     });
     let link = Supervised::spawn(conn, SupervisedOptions::default());
     let fleet = Fleet::spawn();
-    let feed = fleet.feed_remote(marsad_proto::HostId::new("old"), link.clone());
-    // The feed task ends by itself.
-    tokio::time::timeout(T, feed)
-        .await
-        .expect("the feed ended")
-        .unwrap();
+    fleet
+        .host_upserted(
+            marsad_proto::hosts::HostEntry {
+                id: marsad_proto::HostId::new("old"),
+                name: "old".into(),
+                kind: marsad_proto::hosts::HostKind::Local,
+                platform: None,
+                created_at_ms: 0,
+                interactive_auth: false,
+                local_files: false,
+                shared_connection: false,
+                signed_out: false,
+                machine: None,
+            },
+            marsad_proto::fleet::FleetLink::Remote {
+                state: marsad_proto::LinkState::Connecting,
+            },
+        )
+        .await;
+    let remote = fleet.feed_remote(marsad_proto::HostId::new("old"), link.clone());
+    let mut events = fleet.subscribe(None).await.unwrap();
+    let shown = tokio::time::timeout(T, async {
+        loop {
+            let (_, v) = futures::StreamExt::next(&mut events)
+                .await
+                .expect("the fleet is open")
+                .expect("an event");
+            if let marsad_proto::fleet::FleetEvent::FeedError {
+                host,
+                error: Some(text),
+            } = serde_json::from_value(v).expect("a fleet event")
+            {
+                if host.as_str() == "old" {
+                    return text;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the refusal is shown as the host's feed error");
+    assert!(shown.starts_with("topic_not_found"), "{shown}");
+    assert!(!remote.is_finished(), "the feed waits for the link");
     assert!(wasit_diag::flush(T), "the records are written");
     let recs = records(&dir.join("feed.ndjson"));
     let feed: Vec<(&str, Option<&str>)> = of(&recs, "fleet.feed")
@@ -2590,6 +2626,7 @@ async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
     for r in of(&recs, "fleet.feed") {
         assert_eq!(r["host"], "old");
     }
+    remote.abort();
     link.stop().await;
 }
 

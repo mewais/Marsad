@@ -398,7 +398,9 @@ impl Tracker {
                 self.sessions.remove(&key);
                 self.needs_you.remove(&key);
             }
-            FleetEvent::AuthPrompt { .. } | FleetEvent::Git { .. } => {}
+            FleetEvent::AuthPrompt { .. }
+            | FleetEvent::Git { .. }
+            | FleetEvent::FeedError { .. } => {}
         }
         out
     }
@@ -491,6 +493,7 @@ mod tests {
                 interactive_auth: false,
                 local_files: false,
                 shared_connection: false,
+                signed_out: false,
                 machine: None,
             },
             link,
@@ -498,6 +501,7 @@ mod tests {
             sessions,
             auth_prompt: None,
             git: Vec::new(),
+            feed_error: None,
         }
     }
 

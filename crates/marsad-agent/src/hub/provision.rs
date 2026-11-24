@@ -53,12 +53,13 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use marsad_proto::daemon::VersionInfo;
 use marsad_proto::diag::{
-    BootShell, BootStage, HelperAction, HostsOp, MarsadEvent, WindowsRetryWhy,
+    BootShell, BootStage, HelperAction, HostsOp, MarsadEvent, MasterExitWhy, WindowsRetryWhy,
 };
 use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform, SignInRepeat};
 use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use wasit_control::wire::RpcError;
 use wasit_control::{
     classify_command_failure, Attempt, ClientOptions, CommandFailureKind, CommandSpec,
     CommandTransport, ConnectDiag, ConnectError, ControlClient, HostSpec, LinkConnector,
@@ -845,6 +846,16 @@ const HELD_NO_MASTER: &str =
 /// The user signed out of the host's shared connection.
 const SIGNED_OUT_DETAIL: &str = "you signed out of this host: connect it to sign in again";
 
+/// The refusal of an attempt whose host the user signed out of, whether the sign-out came before
+/// the attempt or during its sign-in. WHY a refusal and not a `Command` AuthNeeded: the supervisor
+/// retries a refused attempt only after asking `hold`, and `hold` parks the host as `held: true`
+/// with this detail. A `Command` AuthNeeded would park it as a failed attempt that asked for a
+/// person (`held: false`), which the app reads as a sign-in that failed. A sign-out is the user's
+/// own word, so both paths must report the same parked state.
+fn signed_out_refusal() -> ConnectError {
+    ConnectError::Refused(RpcError::new("auth_needed", SIGNED_OUT_DETAIL))
+}
+
 impl BootstrapConnector {
     /// Why `entry` waits for the user, in words.
     fn held_detail(&self, entry: &HostEntry) -> String {
@@ -1363,7 +1374,13 @@ impl BootstrapConnector {
             Check::Absent => {}
         }
         let armed = self.prompts.armed(host);
-        if !armed && (entry.interactive_auth || self.masters.signed_out(host)) {
+        if !armed && self.masters.signed_out(host) {
+            return Err(Failure {
+                stage: BootStage::Prepare,
+                error: signed_out_refusal(),
+            });
+        }
+        if !armed && entry.interactive_auth {
             return Err(Failure {
                 stage: BootStage::Prepare,
                 error: cmd_err(
@@ -1375,7 +1392,7 @@ impl BootstrapConnector {
         }
 
         trail.reach(BootStage::SignIn);
-        self.masters.begin_signin(entry, &control).await;
+        let generation = self.masters.begin_signin(entry, &control).await;
         emit(MarsadEvent::SshSignInStarted {
             host: trail.host.clone(),
             n: trail.n(),
@@ -1437,18 +1454,27 @@ impl BootstrapConnector {
                 ),
             });
         }
-        self.masters.signed_in(host);
-        emit(MarsadEvent::SshSignInDone {
-            host: trail.host.clone(),
-            n: trail.n(),
-            asked: signin.asked(),
-            ms: diag::ms(began),
-        });
-        // The host answered and the user's sign-in worked: what it asked is learned now, and
-        // the click that allowed it is spent.
-        self.learn_login(entry, signin).await;
-        self.prompts.disarm(host);
-        Ok((control, true))
+        if self.masters.signed_in(host, generation) {
+            emit(MarsadEvent::SshSignInDone {
+                host: trail.host.clone(),
+                n: trail.n(),
+                asked: signin.asked(),
+                ms: diag::ms(began),
+            });
+            // The host answered and the user's sign-in worked: what it asked is learned now, and
+            // the click that allowed it is spent.
+            self.learn_login(entry, signin).await;
+            self.prompts.disarm(host);
+            Ok((control, true))
+        } else {
+            // Signed out during this sign-in: end the connection opened by this attempt and park
+            // the host.
+            self.masters.exit(entry, MasterExitWhy::SignedOut).await;
+            Err(Failure {
+                stage: BootStage::SignIn,
+                error: signed_out_refusal(),
+            })
+        }
     }
 }
 
@@ -1670,5 +1696,75 @@ mod tests {
         let none = BootReport::parse("MARSAD-BOOT Darwin arm64 none");
         assert!(none.installed.is_none());
         assert_eq!(none.arch, "arm64");
+    }
+
+    /// A host the user signed out of, with no connection open and no attempt in flight, is refused
+    /// its sign-in as signed out: the same refusal an attempt that was signed out mid-sign-in gets
+    /// (so the supervisor parks it with `held: true`), never as a failed attempt that asked for a
+    /// person (`held: false`).
+    #[tokio::test]
+    async fn an_attempt_for_a_signed_out_host_is_refused_as_signed_out() {
+        let dir = std::env::temp_dir().join(format!("mrs-signed-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let masters = Masters::new(dir.join("ssh"));
+        let id = HostId::new("signedout");
+        let entry = HostEntry {
+            id: id.clone(),
+            name: "so".into(),
+            kind: HostKind::Ssh {
+                target: "u@127.0.0.1".into(),
+                port: None,
+                identity_file: None,
+                options: Vec::new(),
+            },
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            local_files: false,
+            shared_connection: false,
+            signed_out: true,
+            machine: None,
+        };
+        let entries: Entries = Arc::new(RwLock::new(HashMap::from([(id.clone(), entry.clone())])));
+        let (learned, _learned_rx) = mpsc::channel(8);
+        let prompts = Prompts::new(crate::hub::fleet::Fleet::spawn(), Duration::from_secs(5));
+        let connector = BootstrapConnector {
+            entries,
+            learned,
+            prompts: prompts.clone(),
+            restarts: Restarts::default(),
+            masters: masters.clone(),
+            own: VersionInfo {
+                build: "test".into(),
+                target: "test".into(),
+            },
+            bin_dir: None,
+            socket: dir.join("hub.sock"),
+            diag_dir: dir.join("diag"),
+        };
+        masters.mark_signed_out(&id);
+        masters.prepare().await.unwrap();
+        let spec = HostSpec::new(id.clone(), ["true"]);
+        let trail = Trail::new(&id, Attempt::new(1));
+        let signin = prompts.begin_attempt(&id, None);
+        let Err(failure) = connector
+            .shared_connection(
+                &spec,
+                &entry,
+                Path::new("/nonexistent/askpass"),
+                &trail,
+                &signin,
+            )
+            .await
+        else {
+            panic!("a signed-out host must not sign in");
+        };
+        match failure.error {
+            ConnectError::Refused(r) => {
+                assert_eq!(r.code, "auth_needed");
+                assert_eq!(r.message, SIGNED_OUT_DETAIL);
+            }
+            other => panic!("the signed-out refusal must be Refused, not {other:?}"),
+        }
     }
 }

@@ -7,7 +7,13 @@ import { linkView, type HostState } from "./hosts";
 import type { Feeds } from "./feeds";
 import { LOADING, READY, type AppState, type AppStore, type HubLink, type LoadKey } from "./model";
 
-const toHost = (f: FleetHost): HostState => ({ entry: f.host, link: f.link, sessionsLive: f.sessions_live, authPrompt: f.auth_prompt ?? null });
+const toHost = (f: FleetHost): HostState => ({
+  entry: f.host,
+  link: f.link,
+  sessionsLive: f.sessions_live,
+  authPrompt: f.auth_prompt ?? null,
+  feedError: f.feed_error ?? null,
+});
 
 const warned = new Set<string>();
 
@@ -35,7 +41,15 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
     }
     case "host_upserted": {
       const cur = s.hosts[e.host.id];
-      const h: HostState = cur ? { ...cur, entry: e.host } : { entry: e.host, link: e.host.kind.kind === "local" ? { link: "local" } : { link: "remote", state: { state: "connecting" } }, sessionsLive: false, authPrompt: null };
+      const h: HostState = cur
+        ? { ...cur, entry: e.host }
+        : {
+            entry: e.host,
+            link: e.host.kind.kind === "local" ? { link: "local" } : { link: "remote", state: { state: "connecting" } },
+            sessionsLive: false,
+            authPrompt: null,
+            feedError: null,
+          };
       return { ...s, hosts: { ...s.hosts, [e.host.id]: h }, hostOrder: cur ? s.hostOrder : [...s.hostOrder, e.host.id] };
     }
     case "host_removed": {
@@ -48,9 +62,8 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
     case "link": {
       const cur = s.hosts[e.host];
       if (!cur || cur.link.link === "local") return s;
-      // The hub drops `sessions_live` when a link is not connected (and says so only through this
-      // event); it is true again when the host delivers its list (`sessions`).
-      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state }, sessionsLive: cur.sessionsLive && e.state.state === "connected" } } };
+      const sessionsLive = e.state.state === "connected" ? cur.sessionsLive : false;
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state }, sessionsLive } } };
     }
     case "git":
       return { ...s, git: { ...s.git, [e.host]: { ...s.git[e.host], [e.summary.cwd]: e.summary } } };
@@ -64,7 +77,7 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       for (const k of Object.keys(sessions)) if (k.startsWith(e.host + "/")) delete sessions[k];
       for (const snap of e.sessions) sessions[sessionKey(e.host, snap.id)] = snap;
       const cur = s.hosts[e.host];
-      const hosts = cur ? { ...s.hosts, [e.host]: { ...cur, sessionsLive: true } } : s.hosts;
+      const hosts = cur ? { ...s.hosts, [e.host]: { ...cur, sessionsLive: true, feedError: null } } : s.hosts;
       return withDrivers({ ...s, sessions, hosts, pending: prunePending(s.pending, sessions) });
     }
     case "session_upserted": {
@@ -75,6 +88,13 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       const sessions = { ...s.sessions };
       delete sessions[sessionKey(e.host, e.id)];
       return { ...s, sessions };
+    }
+    case "feed_error": {
+      const cur = s.hosts[e.host];
+      if (!cur) return s;
+      const feedError = e.error ?? null;
+      const sessionsLive = feedError ? false : cur.sessionsLive;
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, feedError, sessionsLive } } };
     }
     default:
       unknownEvent("fleet", e);
@@ -183,7 +203,7 @@ export function connectStore(store: AppStore, api: Api, feeds: Feeds): Controlle
       const h = s.hosts[id];
       const up = h && linkView(h.link).connected;
       if (up && !inv.has(id)) {
-        inv.set(id, feeds.open(`inventory:${id}`, (onEnd) => api.subscribe.inventory(id, (r: InventoryReply) => store.set((st) => withDrivers({ ...st, inventory: { ...st.inventory, [id]: r.drivers } })), onEnd)));
+        inv.set(id, feeds.open(`inventory:${id}`, (onEnd) => api.subscribe.inventory(id, (r: InventoryReply) => store.set((st) => withDrivers({ ...st, inventory: { ...st.inventory, [id]: r.drivers } })), onEnd), id));
       } else if (!up && inv.has(id)) {
         inv.get(id)!();
         inv.delete(id);
@@ -192,7 +212,10 @@ export function connectStore(store: AppStore, api: Api, feeds: Feeds): Controlle
   };
   const offFleet = feeds.open("fleet", (onEnd) =>
     api.subscribe.fleet((e) => {
+      // A host whose link comes back (it was not up before this event) gets its ended feeds started again.
+      const before = e?.kind === "link" ? store.get().hosts[e.host] : undefined;
       store.set((s) => applyFleet(s, e));
+      if (before && e?.kind === "link" && e.state.state === "connected" && !linkView(before.link).connected) feeds.retryHost(e.host);
       if (e?.kind === "reset" || e?.kind === "link" || e?.kind === "host_upserted" || e?.kind === "host_removed") syncInventory();
     }, onEnd),
   );

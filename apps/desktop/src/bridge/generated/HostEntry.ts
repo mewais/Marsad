@@ -33,6 +33,12 @@ local_files: boolean,
  */
 shared_connection: boolean, 
 /**
+ * The user explicitly signed out of this host's shared connection: it is not retried until
+ * they ask to sign in again (`hosts.reconnect` clears it). Stored with the host so a hub
+ * restart keeps it parked.
+ */
+signed_out: boolean, 
+/**
  * Key of the machine the host's daemon runs on (from its hello; the hub's own for the
  * local host). Two hosts with the same key are the same machine.
  */

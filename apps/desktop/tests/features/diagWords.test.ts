@@ -224,6 +224,8 @@ const RECORDS: Record<string, [Record<string, unknown>, string]> = {
   "session.command_timeout": [{ session: "s-1", kind: "interrupt" }, "The interrupt for session s-1 timed out waiting; it may still have been applied"],
   "env.capture": [{ source: "login_shell", ms: 142 }, "Captured the login environment (login_shell) in 142 ms"],
   "env.setup": [{ ok: false, ms: 9000 }, "The host's setup commands failed in 9.0 s"],
+  "inventory.sized": [{ driver: "claude", bytes: 90_000, biggest: "sessions", biggest_bytes: 60_000, models: 3, modes: 6, sessions: 200, config: 14, not_listed: 12 }, "The inventory entry of claude weighs 88 KB: the biggest part is its sessions (59 KB), with 200 sessions, 14 configured items, 3 models; 12 items not listed"],
+  "inventory.shed": [{ driver: "claude", bytes: 500_000, budget: 196_608, shed: 40 }, "The inventory entry of claude was 488 KB, over its 192 KB budget: 40 items left out to fit"],
   "session.lost": [{ session: "s-1", error: { code: "shim_unreachable", len: 30, fp: "aaaa0000" } }, "Session s-1 lost its process — shim_unreachable (30 characters long, fingerprint aaaa0000; the text itself is never recorded)"],
   "session.retry": [{ session: "s-1", attempt: 2, error: { code: "shim_unreachable" } }, "Reconnecting to the process of session s-1 — attempt 2 — shim_unreachable"],
   "session.op_failed": [{ session: "s-1", op: "signal", error: { code: "shim_failed" } }, "signal on session s-1 failed — shim_failed"],

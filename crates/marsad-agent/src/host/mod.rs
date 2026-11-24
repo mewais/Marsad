@@ -90,6 +90,10 @@ impl HostServices {
                 if let Some(err) = &e.error {
                     errors.insert(0, err.clone());
                 }
+                // A list the engine had to shorten says so: the items shown are not all there are.
+                if let Some(n) = e.not_listed.filter(|n| n.config > 0) {
+                    errors.push(format!("{} more configured items are not listed", n.config));
+                }
                 return Ok(BaseConfig {
                     driver: e.driver,
                     project: r.project.clone(),

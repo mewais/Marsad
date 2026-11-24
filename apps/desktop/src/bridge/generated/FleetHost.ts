@@ -21,4 +21,9 @@ auth_prompt?: AuthPrompt | null,
 /**
  * Git summaries of the sessions' working directories (one per directory).
  */
-git: Array<GitSummary>, };
+git: Array<GitSummary>, 
+/**
+ * Why the host's session feed was refused (the text says why); `None` once the host's
+ * sessions came through again. Until then `sessions` are the last known ones.
+ */
+feed_error?: string | null, };

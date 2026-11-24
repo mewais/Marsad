@@ -363,6 +363,7 @@ async fn legacy_session(root: &Path, work: &Path, scratch: &Path) -> String {
 async fn legacy_session_inner(root: &Path, work: &Path, scratch: &Path) -> String {
     let launcher = wasit_runtime::ShimLauncher::subcommand(agent(), "shim");
     let mut cfg = wasit_runtime::RuntimeConfig::new(root.to_path_buf(), launcher);
+    cfg.derivation = "test-build".to_string();
     let o = cfg
         .overrides
         .entry(wasit_core::DriverId::new("claude"))

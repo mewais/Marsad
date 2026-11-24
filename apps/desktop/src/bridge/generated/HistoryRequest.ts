@@ -19,4 +19,9 @@ scope?: HistoryScope,
  * journal cursors like any other (greater than the live events shown before the history
  * arrived): render them above the live transcript, in cursor order among themselves.
  */
-earlier?: boolean, };
+earlier?: boolean, 
+/**
+ * Byte budget of the page, see [`page_budget`]. A page stops once it has read this many
+ * bytes of the log, after at least one item, so it may exceed the budget by one event.
+ */
+max_bytes?: number | null, };

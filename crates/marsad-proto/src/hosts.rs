@@ -70,6 +70,11 @@ pub struct HostEntry {
     /// connection, so there it is `false` and the UI offers no sign-out.
     #[serde(default)]
     pub shared_connection: bool,
+    /// The user explicitly signed out of this host's shared connection: it is not retried until
+    /// they ask to sign in again (`hosts.reconnect` clears it). Stored with the host so a hub
+    /// restart keeps it parked.
+    #[serde(default)]
+    pub signed_out: bool,
     /// Key of the machine the host's daemon runs on (from its hello; the hub's own for the
     /// local host). Two hosts with the same key are the same machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -608,6 +613,7 @@ mod shared_connection_tests {
             interactive_auth: false,
             local_files: false,
             shared_connection: false,
+            signed_out: false,
             machine: None,
         };
         e.derive_local_files();

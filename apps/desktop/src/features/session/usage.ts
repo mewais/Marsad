@@ -30,8 +30,10 @@ export interface UsageSummary {
 
 /** Every usage figure of a session in one place: the session sidebar and the header both read it. */
 export function usageSummary(snap: SessionSnapshot): UsageSummary {
-  // The live report is newer than the last completed turn's totals once it has caught up with them.
-  const u = snap.live_usage && snap.live_usage.input_tokens >= snap.usage.input_tokens ? snap.live_usage : snap.usage;
+  // The live report is newer than the last completed turn's totals once it has caught up with them: by its
+  // token counts, or, for an agent whose live report carries cost before its token counts (Kilo), by its cost.
+  const live = snap.live_usage;
+  const u = live && (live.input_tokens >= snap.usage.input_tokens || live.cost_usd >= snap.usage.cost_usd) ? live : snap.usage;
   return {
     reportsCost: snap.capabilities.cost,
     reportsUsage: snap.capabilities.usage,

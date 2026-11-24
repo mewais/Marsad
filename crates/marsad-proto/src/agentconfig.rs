@@ -470,7 +470,8 @@ pub struct BaseConfig {
     pub items: Vec<ConfigItem>,
     /// Probes were still running when the bounded wait ended (items may be incomplete).
     pub refreshing: bool,
-    /// Probe failures (each also leaves its items out).
+    /// Probe failures (each also leaves its items out), and a note when the list was shortened
+    /// (more items than the engine lists).
     #[serde(default)]
     pub errors: Vec<String>,
     pub refreshed_at_ms: u64,

@@ -4,7 +4,7 @@ import { elapsed } from "../../lib/format";
 import { Link, sessionPath } from "../../router";
 import { stopTaskPendingKey, useActions, useAppState, usePending, useSessionReach, useSessionView } from "../../state";
 import { Button, Icon, useNow } from "../../ui";
-import { orderSubagents, otherBackgroundTasks, taskElapsedMs, taskLabel, taskState, type TaskState } from "./tasks";
+import { otherBackgroundTasks, taskElapsedMs, taskLabel, taskState, type TaskState } from "./tasks";
 
 /** How long a task or subagent has run (it ticks while it runs) or ran. */
 export function Elapsed({ t }: { t: { started_at_ms: number; ended_at_ms?: number | null; running: boolean } }) {
@@ -38,23 +38,28 @@ export const subagentName = (s: Pick<SubagentInfo, "subagent_type" | "name">): s
 
 const calls = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
 
-const Subagent = memo(function Subagent({ sessionKey, host, id, s, selected }: { sessionKey: SessionKey; host: string; id: string; s: SubagentInfo; selected: boolean }) {
+export const SubagentRow = memo(function SubagentRow({ sessionKey, host, id, s, selected }: { sessionKey: SessionKey; host: string; id: string; s: SubagentInfo; selected: boolean }) {
   const st = taskState(s);
   const { icon, cls } = stateIcon(st);
   const label = s.description || subagentName(s);
   return (
-    <div className="wk" data-testid="side-subagent" data-running={s.running ? "" : undefined}>
-      <Link className="wk-main" to={sessionPath(host, id, undefined, s.call_id)} aria-current={selected ? "page" : undefined} title={[s.model, s.description].filter(Boolean).join(" · ") || undefined}>
-        <Icon name={icon} size="sm" spin={s.running} className={cls} />
-        <b className="ell">{subagentName(s)}</b>
-        <span className="ell faint">{s.description}</span>
-        <span className="w">{st.word}</span>
-      </Link>
-      <div className="wk-meta faint">
-        <span className="ell">{calls(s.tool_calls)} · <Elapsed t={s} /></span>
-        <span className="flex1" />
+    <div className="subrow" data-testid="subagent-strip-row" data-running={s.running ? "" : undefined} data-selected={selected ? "" : undefined}>
+      <Icon name={icon} size="sm" spin={s.running} className={cls} />
+      <b className="subrow-name ell">{subagentName(s)}</b>
+      <span className="subrow-desc ell" title={[s.model, s.description].filter(Boolean).join(" · ") || undefined}>{s.description}</span>
+      <span className={`subrow-st ${cls}`}>{st.word}</span>
+      <span className="subrow-meta faint tnum">{calls(s.tool_calls)} · <Elapsed t={s} /></span>
+      <span className="subrow-acts">
         {s.running && s.task_id ? <StopTask sessionKey={sessionKey} taskId={s.task_id} what={`subagent ${label}`} /> : null}
-      </div>
+        <Link
+          className="btn sm ghost"
+          to={sessionPath(host, id, undefined, s.call_id)}
+          aria-current={selected ? "page" : undefined}
+          aria-label={`Open transcript for ${label}`}
+        >
+          <Icon name="chevr" size="xs" />Open transcript
+        </Link>
+      </span>
     </div>
   );
 });
@@ -79,31 +84,18 @@ const Task = memo(function Task({ sessionKey, t }: { sessionKey: SessionKey; t: 
 });
 
 /**
- * The work the agent runs besides its own turn, as the daemon reports it: its subagents (running first, then the
- * finished ones, each newest first; selecting one opens its transcript) and the background tasks that are not
- * subagents. Nothing is listed that the snapshot does not hold.
+ * Background tasks running in this session that are not subagents (subagents live in the expandable strip above the
+ * composer). Nothing is listed that the snapshot does not hold.
  */
-export function SessionWork({ sessionKey, host, id, snap, selected }: { sessionKey: SessionKey; host: string; id: string; snap: Pick<SessionSnapshot, "subagents" | "tasks">; selected?: string }) {
-  const subagents = orderSubagents(snap.subagents);
+export function SessionWork({ sessionKey, snap }: { sessionKey: SessionKey; snap: Pick<SessionSnapshot, "subagents" | "tasks"> }) {
   const tasks = otherBackgroundTasks(snap);
+  if (!tasks.length) return null;
   return (
-    <>
-      {subagents.length ? (
-        <div>
-          <h4>Subagents · {subagents.length}</h4>
-          <div className="hist work" data-testid="side-subagents">
-            {subagents.map((s) => <Subagent key={s.call_id} sessionKey={sessionKey} host={host} id={id} s={s} selected={s.call_id === selected} />)}
-          </div>
-        </div>
-      ) : null}
-      {tasks.length ? (
-        <div>
-          <h4>Background tasks · {tasks.length}</h4>
-          <div className="hist work" data-testid="side-tasks">
-            {tasks.map((t) => <Task key={t.task_id} sessionKey={sessionKey} t={t} />)}
-          </div>
-        </div>
-      ) : null}
-    </>
+    <div>
+      <h4>Background tasks · {tasks.length}</h4>
+      <div className="hist work" data-testid="side-tasks">
+        {tasks.map((t) => <Task key={t.task_id} sessionKey={sessionKey} t={t} />)}
+      </div>
+    </div>
   );
 }

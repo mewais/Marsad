@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { askWords, backgroundWords, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, signOutPendingKey, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
+import { askWords, backgroundWords, driverVersionState, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, signOutPendingKey, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
-import { address, linkSub } from "./linkText";
+import { address, feedReason, linkSub } from "./linkText";
 import { SignInButton } from "./SignInButton";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 import { EnvironmentSection } from "./EnvironmentSection";
@@ -92,6 +92,7 @@ export function HostDetail({ host }: { host: HostView }) {
     <aside className="hd" aria-label={`${host.name} details`}>
       <div className="hd-title"><Icon name={hostIcon(host)} size="lg" /><div><div className="h2">{host.name}</div><div className="faint small">{[osWord(entry?.platform?.os), entry?.platform?.arch, host.local ? "Local" : k?.kind === "ssh" ? "SSH" : "WSL"].filter(Boolean).join(" · ")}</div></div><span className="sp" /><ConnState host={host} /></div>
       {card}
+      {host.feedError ? <div className="small" role="note" data-testid="host-feed-error">Marsad stopped receiving this host's session list: {feedReason(host.feedError)}. It will resume when the host reconnects.</div> : null}
       {twins ? <div className="gate" role="note"><div className="gate-h"><Icon name="warn" size="sm" />Same machine as {twins}</div><div className="small">These hosts reach one machine. Keep one of them: sessions and agents are the same on both.</div></div> : null}
       <div>
         <h4 className="eyebrow">Connection</h4>
@@ -108,9 +109,21 @@ export function HostDetail({ host }: { host: HostView }) {
         <h4 className="eyebrow">Agent CLIs</h4>
         {!inv ? <div className="faint small">{lv.connected ? "Asking the host…" : "Known once the host is connected."}</div> : (
           <table className="t"><tbody>
-            {inv.map((d) => (
-              <tr key={d.driver}><td><DriverBadge driver={drivers[d.driver] ?? makeDriver(d.driver, d.display_name)} /></td><td><div className={d.installed ? "mono" : "faint"}><Wrap text={d.installed ? d.version ?? "installed" : "Not installed"} /></div><div className="faint small"><Wrap text={[d.command ? `${d.command} →` : null, (d.installed ? d.binary_path : d.error) ?? ""].filter(Boolean).join(" ")} /></div>{d.warning ? <div className="small c-needs"><Icon name="warn" size="xs" /> <Wrap text={d.warning} /></div> : null}</td></tr>
-            ))}
+            {inv.map((d) => {
+              const vs = driverVersionState(d, lv.connected);
+              const versionText = vs.kind === "ready" ? vs.version : vs.kind === "loading" ? "loading…" : vs.kind === "not_reported" ? "Not reported" : "Not installed";
+              const sub = vs.kind === "loading" ? (d.command ? `${d.command} →` : "") : [d.command ? `${d.command} →` : null, (d.installed ? d.binary_path : d.error) ?? ""].filter(Boolean).join(" ");
+              return (
+                <tr key={d.driver}>
+                  <td><DriverBadge driver={drivers[d.driver] ?? makeDriver(d.driver, d.display_name)} /></td>
+                  <td>
+                    <div className={vs.kind === "ready" ? "mono" : "faint"}><Wrap text={versionText} /></div>
+                    {sub ? <div className="faint small"><Wrap text={sub} /></div> : null}
+                    {d.warning ? <div className="small c-needs"><Icon name="warn" size="xs" /> <Wrap text={d.warning} /></div> : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody></table>
         )}
         {lv.connected ? <Button size="sm" variant="ghost" icon="refresh" className="mt6" blocked={reach} onClick={() => void actions.run(`refresh:${host.id}`, "Could not refresh the agents", () => api.refreshDrivers(host.id))}>Re-detect agents</Button> : null}

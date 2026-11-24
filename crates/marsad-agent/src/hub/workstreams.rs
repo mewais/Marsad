@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use futures::StreamExt;
-use marsad_proto::fleet::FleetEvent;
+use marsad_proto::fleet::{FleetEvent, FleetLink};
 use marsad_proto::workstream::{
     EdgeView, HandoffGateView, NodeLaunch, NodeSession, NodeView, SpawnGateView, SpawnOutcomeView,
     TopologySync, Workstream, WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
@@ -39,9 +39,9 @@ use marsad_proto::workstream::{
 };
 use marsad_proto::{HostId, MarsadError, SessionSnapshot};
 use marsad_store::Store;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use wasit_control::{Cursor, DurableOpts, EventStream, RequestOpts, RpcError, Supervised};
+use wasit_control::{Cursor, EventStream, RequestOpts, RpcError, Supervised};
 use wasit_core::GateRequest;
 use wasl_proto::{
     methods as wasl_methods, spawn_request_id, topics as wasl_topics, AgentId, Edge,
@@ -49,7 +49,7 @@ use wasl_proto::{
     TaskId, TaskState, TaskView, Topology, TopologyApplied,
 };
 
-use super::fleet::Fleet;
+use super::fleet::{Fleet, Follow, Step};
 use super::ring::{self, Joined, Ring};
 use crate::hub_events;
 use crate::util::now_ms;
@@ -93,6 +93,14 @@ enum Input {
 #[derive(Clone)]
 pub struct Workstreams {
     tx: mpsc::Sender<Input>,
+}
+
+/// Whether a host's link is up (the local host's always is).
+fn link_is_up(link: &FleetLink) -> bool {
+    match link {
+        FleetLink::Local => true,
+        FleetLink::Remote { state } => state.is_connected(),
+    }
 }
 
 /// The Wasl topology a document stands for (`version` included).
@@ -271,6 +279,8 @@ struct Actor {
     sync: HashMap<(String, HostId), TopologySync>,
     launching: HashSet<(String, String)>,
     feeds: HashMap<HostId, Vec<JoinHandle<()>>>,
+    /// Whether each host's link is up (the feeds of a host follow it; the local host is always up).
+    links: HashMap<HostId, watch::Sender<bool>>,
     last: HashMap<String, WorkstreamView>,
     ring: Ring<WorkstreamsEvent>,
 }
@@ -303,6 +313,7 @@ impl Workstreams {
             sync: HashMap::new(),
             launching: HashSet::new(),
             feeds: HashMap::new(),
+            links: HashMap::new(),
             last: HashMap::new(),
             ring: Ring::new(),
         };
@@ -801,6 +812,7 @@ impl Actor {
                     self.unfeed(&h);
                 }
                 for h in hosts {
+                    self.set_link(&h.host.id, link_is_up(&h.link));
                     self.ensure_feeds(&h.host.id);
                     for s in h.sessions {
                         self.sessions.insert(
@@ -821,10 +833,12 @@ impl Actor {
             FleetEvent::HostUpserted { host } => self.ensure_feeds(&host.id),
             FleetEvent::HostRemoved { id } => {
                 self.unfeed(&id);
+                self.links.remove(&id);
                 self.sessions.retain(|k, _| k.host != id);
                 touched_hosts.push(id);
             }
             FleetEvent::Link { host, state } => {
+                self.set_link(&host, state.is_connected());
                 if state.is_connected() {
                     let ids: Vec<String> = self
                         .docs
@@ -865,7 +879,9 @@ impl Actor {
                 self.refresh_session(&key);
                 return;
             }
-            FleetEvent::AuthPrompt { .. } | FleetEvent::Git { .. } => return,
+            FleetEvent::AuthPrompt { .. }
+            | FleetEvent::Git { .. }
+            | FleetEvent::FeedError { .. } => return,
         }
         for h in touched_hosts {
             let ids: Vec<String> = self
@@ -896,14 +912,36 @@ impl Actor {
         }
     }
 
+    /// Whether `host`'s link is up, as a watch its feeds follow. A host the actor has not heard of
+    /// is down until its link connects (the local host is always up).
+    fn link_sender(&mut self, host: &HostId) -> &watch::Sender<bool> {
+        let up = *host == self.local;
+        self.links
+            .entry(host.clone())
+            .or_insert_with(|| watch::channel(up).0)
+    }
+
+    /// Record the link state of `host`. Only a change is announced to the feeds: a repeated state
+    /// must not make them subscribe again.
+    fn set_link(&mut self, host: &HostId, up: bool) {
+        self.link_sender(host).send_if_modified(|v| {
+            let changed = *v != up;
+            *v = up;
+            changed
+        });
+    }
+
     fn ensure_feeds(&mut self, host: &HostId) {
         if self.feeds.contains_key(host) {
             return;
         }
-        let tasks = self.spawn_feed(host.clone(), wasl_topics::TASKS);
-        let edges = self.spawn_feed(host.clone(), wasl_topics::EDGES);
-        let spawns = self.spawn_feed(host.clone(), wasl_topics::SPAWNS);
-        self.feeds.insert(host.clone(), vec![tasks, edges, spawns]);
+        let up = self.link_sender(host).subscribe();
+        let handles = vec![
+            self.spawn_feed(host.clone(), wasl_topics::TASKS, up.clone()),
+            self.spawn_feed(host.clone(), wasl_topics::EDGES, up.clone()),
+            self.spawn_feed(host.clone(), wasl_topics::SPAWNS, up),
+        ];
+        self.feeds.insert(host.clone(), handles);
     }
 
     fn unfeed(&mut self, host: &HostId) {
@@ -914,23 +952,31 @@ impl Actor {
         }
     }
 
-    /// Follow a host node's `wasl.tasks` / `wasl.edges` / `wasl.spawns` over the loopback link.
-    fn spawn_feed(&self, host: HostId, topic: &'static str) -> JoinHandle<()> {
-        let mut sub = self.link.subscribe_durable(
+    /// Follow a host node's `wasl.tasks` / `wasl.edges` / `wasl.spawns` over the loopback link,
+    /// for as long as the host is known. Subscribes only while the host's link is up; a refusal
+    /// is logged and the feed is subscribed again when the link next connects.
+    fn spawn_feed(
+        &self,
+        host: HostId,
+        topic: &'static str,
+        up: watch::Receiver<bool>,
+    ) -> JoinHandle<()> {
+        let mut follow = Follow::new(
+            self.link.clone(),
             topic,
-            DurableOpts {
-                host: Some(host.clone()),
-                ..DurableOpts::default()
-            },
+            Some(host.clone()),
+            up,
+            |up: &bool| *up,
+            false,
         );
         let tx = self.inputs.clone();
         tokio::spawn(async move {
-            while let Some(item) = sub.next().await {
-                let v = match item {
-                    Ok((_, v)) => v,
-                    Err(e) => {
+            while let Some(step) = follow.next().await {
+                let v = match step {
+                    Step::Event(v) => v,
+                    Step::Refused(e) => {
                         hub_events::node_feed_ended(&host, topic, &e);
-                        return;
+                        continue;
                     }
                 };
                 let input = match topic {

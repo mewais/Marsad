@@ -17,6 +17,7 @@ export interface HostState {
   link: FleetLink;
   sessionsLive: boolean;
   authPrompt: AuthPrompt | null;
+  feedError: string | null;
 }
 
 export type LinkTone = "ok" | "warn" | "bad" | "info";
@@ -120,6 +121,8 @@ export interface HostView {
   link: HostLink;
   authPrompt: AuthPrompt | null;
   interactiveAuth: boolean;
+  /** Why the host's session feed is not live (last-known sessions are shown). */
+  feedError: string | null;
 }
 
 const cache = new WeakMap<HostState, { hub: HubLink; live: boolean; view: HostView }>();
@@ -144,6 +147,7 @@ export function hostView(h: HostState, hub: HubLink, live: boolean): HostView {
     link: h.link.link === "local" ? { link: "local", hub } : { link: "remote", state: h.link.state, ...(live ? {} : { stale: true }) },
     authPrompt: h.authPrompt,
     interactiveAuth: h.entry.interactive_auth,
+    feedError: h.feedError,
   };
   cache.set(h, { hub, live, view: v });
   return v;

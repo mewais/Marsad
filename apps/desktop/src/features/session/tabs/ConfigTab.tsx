@@ -3,10 +3,10 @@ import { errorMessage } from "../../../bridge/api";
 import type { EffectiveConfig, SessionSnapshot } from "../../../bridge/wire";
 import { splitKey } from "../../../bridge/wire";
 import { useNavigate } from "../../../router";
-import { useActions, useApi, useDriver, useHost, useReach } from "../../../state";
+import { useActions, useApi, useDriver, useHost, useReach, useSessionView } from "../../../state";
 import { Button, Card, Icon, Select, Skeleton } from "../../../ui";
 import { KIND, provenance } from "../../config/provenance";
-import { continueState, modelChoice } from "../../../state/domain";
+import { continueState, modelChoice, sessionModesState, sessionModelsState } from "../../../state/domain";
 
 /** Config tab: model and mode as the CLI reports them, and the effective config of this session with provenance. */
 export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: SessionSnapshot }) {
@@ -33,7 +33,11 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
   useEffect(() => setMode(snap.mode ?? ""), [snap.mode]);
   const name = drv?.displayName ?? snap.driver;
   const reach = useReach(host);
+  const view = useSessionView(sessionKey);
+  const stale = !!view?.stale;
   const live = continueState(snap).kind === "running";
+  const modelsState = sessionModelsState(snap, stale);
+  const modesState = sessionModesState(snap, stale);
   const apply = () => {
     if (model && model !== current) void actions.command(sessionKey, { command: "set_model", model }, { failTitle: "Could not change the model" });
     if (mode && mode !== snap.mode) void actions.command(sessionKey, { command: "set_mode", mode }, { failTitle: "Could not change the mode" });
@@ -43,16 +47,16 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
       <Card>
         <div className="h3">Model and mode</div>
         <div className="field"><span className="lbl">Model</span>
-          <Select label="Model" value={model || undefined} placeholder="Not reported" options={choice.options} onChange={setModel} />
-          <span className="hint">{snap.available_models.length ? `Reported by ${name}${snap.cli_version ? ` ${snap.cli_version}` : ""} on ${hv?.name ?? host}: ${snap.available_models.map((m) => m.id).join(", ")}` : `${name} has not reported its models.`}</span>
+          <Select label="Model" value={model || undefined} placeholder={modelsState === "loading" ? "Loading…" : "Not reported"} options={choice.options} onChange={setModel} />
+          <span className="hint">{snap.available_models.length ? `Reported by ${name}${snap.cli_version ? ` ${snap.cli_version}` : ""} on ${hv?.name ?? host}: ${snap.available_models.map((m) => m.id).join(", ")}` : modelsState === "loading" ? `Loading models from ${name}…` : `${name} has not reported its models.`}</span>
         </div>
         {snap.command ? <div className="field"><span className="lbl">Command</span>
           <code className="mono">{snap.command}</code>
           <span className="hint">{name} runs as <b className="mono">{snap.command}</b> on {hv?.name ?? host}: the host's agent command when the session was created (a continued session keeps it).</span>
         </div> : null}
         <div className="field"><span className="lbl">Mode</span>
-          <Select label="Mode" value={mode || undefined} placeholder="Not reported" options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))} onChange={setMode} />
-          <span className="hint">{snap.available_modes.length ? `Modes offered by ${name}` : `${name} reports no modes.`}</span>
+          <Select label="Mode" value={mode || undefined} placeholder={modesState === "loading" ? "Loading…" : "Not reported"} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))} onChange={setMode} />
+          <span className="hint">{snap.available_modes.length ? `Modes offered by ${name}` : modesState === "loading" ? `Loading modes from ${name}…` : `${name} reports no modes.`}</span>
         </div>
         <div className="row-gap">
           <Button variant="primary" size="sm" blocked={reach} disabled={!live || ((model === current || !snap.capabilities.set_model) && (mode === (snap.mode ?? "") || !snap.capabilities.set_mode))} onClick={apply}>Apply to running session</Button>

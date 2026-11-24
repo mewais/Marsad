@@ -31,6 +31,10 @@ pub struct FleetHost {
     /// Git summaries of the sessions' working directories (one per directory).
     #[serde(default)]
     pub git: Vec<GitSummary>,
+    /// Why the host's session feed was refused (the text says why); `None` once the host's
+    /// sessions came through again. Until then `sessions` are the last known ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed_error: Option<String>,
 }
 
 /// A cheap git summary of one working directory, kept fresh by the hub in the background:
@@ -113,5 +117,11 @@ pub enum FleetEvent {
     Git {
         host: HostId,
         summary: GitSummary,
+    },
+    /// A host's session feed was refused (`Some`: why; the feed is retried when the host's link
+    /// next connects) or its sessions came through again (`None`).
+    FeedError {
+        host: HostId,
+        error: Option<String>,
     },
 }

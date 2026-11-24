@@ -206,10 +206,18 @@ fn record(n: &Note, suppressed: Option<&str>) {
     }
 }
 
-/// Run the watcher (forever).
+/// Whether a fleet subscription that is not running is started (again) now that the hub link is
+/// in `link`. A fleet subscription that failed (the daemon refused the topic, or closed it) is not
+/// retried on a timer: the hub link coming back is the event that starts it again.
+pub(crate) fn resubscribes_on(link: &LinkState) -> bool {
+    link.is_connected()
+}
+
+/// Run the watcher (forever, unless the link to the daemon itself is gone).
 pub async fn run(app: AppHandle) {
     let shell = app.state::<Shell>();
-    let mut sub = shell.client.fleet(None);
+    // `None` while the fleet subscription has failed: it is started again when the hub link is back.
+    let mut sub = Some(shell.client.fleet(None));
     let mut link = shell.client.link().state();
     let mut tracker = Tracker::default();
     let mut hosts: Vec<FleetHost> = Vec::new();
@@ -220,17 +228,25 @@ pub async fn run(app: AppHandle) {
     publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
     loop {
         tokio::select! {
-            item = sub.next() => {
+            item = async {
+                match sub.as_mut() {
+                    Some(s) => s.next().await,
+                    None => None,
+                }
+            }, if sub.is_some() => {
                 let ev = match item {
                     Some(Ok((_, ev))) => ev,
                     Some(Err(e)) => {
-                        // From here on no notification, no tray count, no host link updates.
-                        ended("fleet_failed", Some(diag::foreign(&e.to_string())));
-                        return;
+                        // No notification, tray count or host link update until the subscription
+                        // is back; the reason goes to the app log.
+                        diag::failed("fleet_feed", &e);
+                        sub = None;
+                        continue;
                     }
                     None => {
-                        ended("fleet_closed", None);
-                        return;
+                        diag::failed("fleet_feed", &"the daemon closed the fleet topic");
+                        sub = None;
+                        continue;
                     }
                 };
                 apply(&mut hosts, &ev);
@@ -246,6 +262,10 @@ pub async fn run(app: AppHandle) {
                 }
                 daemon = link.borrow_and_update().clone();
                 diag::emit(diag::hub_link(&daemon));
+                // A fresh subscription starts with a `reset` of the hosts, which replaces what is held.
+                if sub.is_none() && resubscribes_on(&daemon) {
+                    sub = Some(shell.client.fleet(None));
+                }
                 publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
             }
         }
@@ -277,6 +297,7 @@ fn apply(hosts: &mut Vec<FleetHost>, ev: &FleetEvent) {
                     sessions: Vec::new(),
                     auth_prompt: None,
                     git: Vec::new(),
+                    feed_error: None,
                 }),
             }
         }
@@ -316,6 +337,17 @@ mod tests {
             serde_json::to_value(&session).expect("json"),
             serde_json::json!({"host": "gpu", "session": id})
         );
+    }
+
+    #[test]
+    fn a_failed_fleet_feed_is_started_again_only_when_the_hub_link_is_connected() {
+        let hello = wasit_control::Hello::new("test", "marsad-desktop", "gui");
+        assert!(resubscribes_on(&LinkState::Connected { hello }));
+        assert!(!resubscribes_on(&LinkState::Connecting));
+        assert!(!resubscribes_on(&LinkState::Failed {
+            reason: "cannot start marsad-agent".into(),
+            problem: None,
+        }));
     }
 
     #[test]

@@ -129,6 +129,13 @@ impl Registry {
             .host_upserted(r.inner.local.clone(), FleetLink::Local)
             .await;
         for h in r.inner.store.hosts().await? {
+            if Masters::applies(&h) {
+                if h.signed_out {
+                    r.inner.masters.mark_signed_out(&h.id);
+                } else {
+                    r.inner.masters.set_signed_out(&h.id, false);
+                }
+            }
             if let Err(e) = r.link(h.clone()).await {
                 failed(Some(&h.id), HostsOp::StartLink, &e);
             }
@@ -275,6 +282,7 @@ impl Registry {
             interactive_auth: false,
             local_files: false,
             shared_connection: false,
+            signed_out: false,
             machine: None,
         };
         let mut entry = entry;
@@ -311,6 +319,7 @@ impl Registry {
             entry.interactive_auth = old.interactive_auth;
             entry.machine = old.machine.clone();
         }
+        entry.signed_out = old.signed_out;
         self.inner.store.put_host(entry.clone()).await?;
         if entry.kind != old.kind {
             self.unlink(&entry.id).await;
@@ -376,6 +385,20 @@ impl Registry {
         }
         // Asking to connect is asking to sign in again, after a sign-out too.
         self.inner.masters.set_signed_out(id, false);
+        if let Some(mut entry) = self.get(id) {
+            if entry.signed_out {
+                entry.signed_out = false;
+                self.inner
+                    .entries
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(entry.id.clone(), entry.clone());
+                let store = self.inner.store.clone();
+                tokio::spawn(async move {
+                    let _ = store.put_host(entry).await;
+                });
+            }
+        }
         self.inner.prompts.arm(id);
         if self.inner.hub.reconnect_now(id) {
             Ok(())
@@ -418,7 +441,15 @@ impl Registry {
         // First the user's word, so that nothing started in between signs in again; a prompt
         // or click of the host is void.
         self.inner.prompts.forget(id);
-        self.inner.masters.set_signed_out(id, true);
+        self.inner.masters.mark_signed_out(id);
+        let mut entry = entry;
+        entry.signed_out = true;
+        self.inner.store.put_host(entry.clone()).await?;
+        self.inner
+            .entries
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(entry.id.clone(), entry.clone());
         let ended = self
             .inner
             .masters
@@ -430,6 +461,17 @@ impl Registry {
         if ended != MasterExitOutcome::Ended {
             self.inner.hub.reconnect_now(id);
         }
+        // Record the flag with the fleet state that follows from the supervisor.
+        let state = self
+            .inner
+            .hub
+            .link(&entry.id)
+            .map(|s| s.current_state())
+            .unwrap_or(LinkState::Connecting);
+        self.inner
+            .fleet
+            .host_upserted(entry, FleetLink::Remote { state })
+            .await;
         Ok(())
     }
 

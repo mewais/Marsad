@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { hostPath, useNavigate } from "../../router";
 import { PageHeader } from "../../shell/PageHeader";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, osWord, useActions, useApi, useAppState, useHost, useHosts, useReach } from "../../state";
+import { driverVersionState, linkView, osWord, useActions, useApi, useAppState, useHost, useHosts, useReach } from "../../state";
 import { Button, ConnState, EmptyState, Icon, Skeleton, hostIcon, useNow } from "../../ui";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
@@ -19,6 +19,9 @@ const HostRow = memo(function HostRow({ id, selected, onSelect }: { id: string; 
   const arch = useAppStateArch(id);
   if (!h) return null;
   const lv = linkView(h.link, h.authPrompt);
+  const connected = lv.connected;
+  const installed = inv ? inv.filter((d) => d.installed) : [];
+  const loadingAny = !!inv && connected && inv.some((d) => driverVersionState(d, connected).kind === "loading");
   return (
     <div role="option" aria-selected={selected} tabIndex={selected ? 0 : -1} className={`hrow${selected ? " on" : ""}`} data-host={id} onClick={() => onSelect(id)}
       onKeyDown={(e) => {
@@ -33,7 +36,25 @@ const HostRow = memo(function HostRow({ id, selected, onSelect }: { id: string; 
       <span className="hn">{h.name}<small>{[osWord(h.os), arch].filter(Boolean).join(" · ") || "Platform not probed yet"} · {h.local ? "Local" : h.where}</small></span>
       <span className="hst"><ConnState host={h} /><span className="faint sub">{linkSub(h.link, now)}</span>{lv.held ? <SignInButton host={h} /> : null}</span>
       <span className="small"><b className="tnum">{n}</b> <span className="faint">session{n === 1 ? "" : "s"}</span></span>
-      <span className="clis">{inv ? inv.filter((d) => d.installed).map((d) => <span key={d.driver} className="tag" title={d.display_name}><b className="mono">{drivers[d.driver]?.initials ?? d.driver.slice(0, 2).toUpperCase()}</b> {d.version}</span>) : <span className="faint small">{linkView(h.link).connected ? "…" : "—"}</span>}</span>
+      <span className="clis">
+        {!inv ? (
+          <span className="faint small" role={connected ? "status" : undefined}>{connected ? "loading…" : "—"}</span>
+        ) : installed.length > 0 ? (
+          installed.map((d) => {
+            const vs = driverVersionState(d, connected);
+            return (
+              <span key={d.driver} className="tag" title={d.display_name}>
+                <b className="mono">{drivers[d.driver]?.initials ?? d.driver.slice(0, 2).toUpperCase()}</b>{" "}
+                {vs.kind === "ready" ? vs.version : vs.kind === "loading" ? "loading…" : "not reported"}
+              </span>
+            );
+          })
+        ) : loadingAny ? (
+          <span className="faint small" role="status">loading…</span>
+        ) : (
+          <span className="faint small">—</span>
+        )}
+      </span>
     </div>
   );
 });
