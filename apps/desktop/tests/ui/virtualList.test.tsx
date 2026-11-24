@@ -33,6 +33,19 @@ const scrollBox = (top: number) => {
     fireEvent.scroll(el);
   });
 };
+/** A scroll the reader drove: a wheel gesture precedes it, so `stickToEnd` may release following. */
+const userScroll = (top: number) => {
+  const el = box();
+  act(() => {
+    fireEvent.wheel(el);
+    el.scrollTop = top;
+    fireEvent.scroll(el);
+  });
+};
+/** Flush the coalesced follow-the-end animation frames (the list re-pins to the end over a few frames as heights settle). */
+const flushRaf = async (n = 10) => {
+  for (let i = 0; i < n; i++) await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(undefined))); });
+};
 
 function list(items: Row[], props: Partial<React.ComponentProps<typeof VirtualList<Row>>> = {}, ref?: React.Ref<VirtualListHandle>) {
   return (
@@ -129,15 +142,170 @@ describe("VirtualList prepend anchoring", () => {
 });
 
 describe("VirtualList stick to end", () => {
-  it("starts at the end, follows appends, and releases when the reader scrolls up", () => {
+  it("starts at the end, follows appends, and releases when the reader scrolls up", async () => {
     const { rerender } = render(list(rows(0, 100), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
     expect(box().scrollTop).toBe(100 * ROW - VIEW);
     rerender(list(rows(0, 110), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
     expect(box().scrollTop).toBe(110 * ROW - VIEW);
     expect(mounted()).toContain("r109");
-    scrollBox(1000);
+    // A reader gesture that leaves the end releases following; a later append does not yank the view back down.
+    userScroll(1000);
     rerender(list(rows(0, 120), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
     expect(box().scrollTop).toBe(1000);
+  });
+
+  it("a bare scroll that is not the reader's (a measurement reflow) does not release following", async () => {
+    const { rerender } = render(list(rows(0, 100), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
+    expect(box().scrollTop).toBe(100 * ROW - VIEW);
+    // A programmatic/reflow scroll lands short of the end but carries no gesture: following must hold.
+    scrollBox(1000);
+    rerender(list(rows(0, 110), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
+    expect(box().scrollTop).toBe(110 * ROW - VIEW);
+    expect(mounted()).toContain("r109");
+  });
+
+  it("re-engages following when the reader returns within 80px of the end", async () => {
+    const { rerender } = render(list(rows(0, 100), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
+    userScroll(1000); // release
+    rerender(list(rows(0, 110), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
+    expect(box().scrollTop).toBe(1000);
+    // The reader scrolls back to within STICK_PX of the end: following re-engages and the next append is followed.
+    userScroll(110 * ROW - VIEW - 40);
+    rerender(list(rows(0, 120), { stickToEnd: true, anchor: "end" }));
+    await flushRaf();
+    expect(box().scrollTop).toBe(120 * ROW - VIEW);
+  });
+});
+
+describe("VirtualList stick to end (variable heights)", () => {
+  // jsdom has no layout, so model the real rendered extent: `.vlist` scrollHeight is the sum of its spacer heights and its
+  // mounted rows' real heights (from HEIGHTS), and scrollTop clamps to scrollHeight - clientHeight — exactly what a browser does,
+  // so a jump can only reach the true end and "opens short" is reproducible.
+  const EST = 40;
+  let HEIGHTS: Record<string, number>;
+  let tops: WeakMap<HTMLElement, number>;
+
+  const contentHeight = (vlist: HTMLElement) => {
+    let sum = 0;
+    for (const child of Array.from(vlist.children) as HTMLElement[]) {
+      if (child.getAttribute("aria-hidden") === "true") sum += parseFloat(child.style.height) || 0;
+      else { const k = child.getAttribute("data-vkey"); sum += (k && HEIGHTS[k]) || EST; }
+    }
+    return Math.round(sum);
+  };
+  const gap = () => { const el = box(); return el.scrollHeight - el.scrollTop - el.clientHeight; };
+  const feed = () => {
+    const ro = FakeRO.list[0];
+    const entries = [...ro.observed]
+      .filter((el) => (el as HTMLElement).getAttribute("data-vkey"))
+      .map((el) => ({ target: el, borderBoxSize: [{ blockSize: HEIGHTS[(el as HTMLElement).getAttribute("data-vkey")!] ?? EST }] }));
+    if (entries.length) act(() => ro.cb(entries as unknown as ResizeObserverEntry[], ro as unknown as ResizeObserver));
+  };
+  // Feed measurements and let the coalesced follow-the-end frames run, round after round, until the window and the end settle.
+  const settle = async (times = 16) => { for (let n = 0; n < times; n++) { feed(); await flushRaf(3); } };
+  const vlist = (items: Row[], props: Partial<React.ComponentProps<typeof VirtualList<Row>>> = {}) =>
+    list(items, { stickToEnd: true, anchor: "end", estimateSize: () => EST, initialCount: 24, ...props });
+
+  beforeEach(() => {
+    HEIGHTS = {};
+    tops = new WeakMap();
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) { return this.classList.contains("vlist") ? contentHeight(this) : 0; },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get(this: HTMLElement) { return tops.get(this) ?? 0; },
+      set(this: HTMLElement, v: number) {
+        const max = Math.max(0, (this.scrollHeight || 0) - (this.clientHeight || 0));
+        tops.set(this, Math.min(Math.max(0, v), max));
+      },
+    });
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+    delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+  });
+
+  it("opens at the true bottom when rows measure well below and above the estimate", async () => {
+    const data = rows(0, 400);
+    data.forEach((r, i) => (HEIGHTS[r.id] = i % 2 ? 18 : 92)); // below and above EST
+    render(vlist(data));
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+    expect(mounted()).toContain("r399");
+  });
+
+  it("follows live appends while at the bottom", async () => {
+    let data = rows(0, 300);
+    data.forEach((r, i) => (HEIGHTS[r.id] = i % 3 ? 22 : 70));
+    const { rerender } = render(vlist(data));
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+    data = rows(0, 306);
+    data.forEach((r, i) => { if (HEIGHTS[r.id] === undefined) HEIGHTS[r.id] = i % 2 ? 20 : 84; });
+    rerender(vlist(data));
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+    expect(mounted()).toContain("r305");
+  });
+
+  it("a reader scroll-up releases follow and later appends do not yank; returning re-engages", async () => {
+    let data = rows(0, 300);
+    data.forEach((r, i) => (HEIGHTS[r.id] = i % 2 ? 24 : 72));
+    const { rerender } = render(vlist(data));
+    await settle();
+    const bottom = box().scrollTop;
+    userScroll(300); // reader leaves the end
+    await settle();
+    const held = box().scrollTop;
+    expect(held).toBeLessThan(bottom - 100);
+    data = rows(0, 304);
+    data.forEach((r) => { if (HEIGHTS[r.id] === undefined) HEIGHTS[r.id] = 60; });
+    rerender(vlist(data));
+    await settle();
+    expect(box().scrollTop).toBe(held); // append did not yank the view down
+    // Reader returns to within STICK_PX of the end: following re-engages.
+    userScroll(box().scrollHeight);
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+    data = rows(0, 308);
+    data.forEach((r) => { if (HEIGHTS[r.id] === undefined) HEIGHTS[r.id] = 50; });
+    rerender(vlist(data));
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+  });
+
+  it("does not loop: 3000 rows with changing measurements settle with a bounded render count", async () => {
+    const data = rows(0, 3000);
+    data.forEach((r, i) => (HEIGHTS[r.id] = 20 + (i % 5) * 14));
+    let renders = 0;
+    render(vlist(data, { renderItem: (r) => { renders++; return <div data-testid="row">{r.id}</div>; } }));
+    const base = renders;
+    // Several batches of *changing* heights: each would re-pin the end; measurements must converge, never loop (React #185).
+    for (let round = 0; round < 6; round++) {
+      const ro = FakeRO.list[0];
+      const entries = [...ro.observed]
+        .filter((el) => (el as HTMLElement).getAttribute("data-vkey"))
+        .map((el) => {
+          const k = (el as HTMLElement).getAttribute("data-vkey")!;
+          HEIGHTS[k] = 20 + ((round + Number(k.slice(1))) % 6) * 12;
+          return { target: el, borderBoxSize: [{ blockSize: HEIGHTS[k] }] };
+        });
+      act(() => ro.cb(entries as unknown as ResizeObserverEntry[], FakeRO.list[0] as unknown as ResizeObserver));
+    }
+    await settle();
+    expect(gap()).toBeLessThanOrEqual(2);
+    expect(mounted()).toContain("r2999");
+    // No runaway: bounded by the mounted window, not the 3000 rows, across all those commits.
+    expect(renders - base).toBeLessThan(3000);
   });
 });
 

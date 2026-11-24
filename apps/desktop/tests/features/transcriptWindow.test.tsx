@@ -33,8 +33,10 @@ describe("the transcript is one virtual list that pages earlier history when its
     // Opened at the bottom, the transcript asks for nothing.
     const asked = () => gate.answered().length;
     const start = asked();
+    // The reader scrolling to the start: a wheel gesture (so a following list releases), then the move and the scroll event.
     const reach = (top: number) =>
       act(() => {
+        fireEvent.wheel(tr);
         tr.scrollTop = top;
         fireEvent.scroll(tr);
       });

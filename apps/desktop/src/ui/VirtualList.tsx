@@ -39,6 +39,8 @@ export interface VirtualListProps<T> {
 const STICK_PX = 80;
 /** Within this many pixels of the top, the reader counts as at the start (`onReachStart`). */
 const START_PX = 120;
+/** A scroll is treated as the reader's own for this long after a wheel/key/pointer/touch gesture (covers inertial scrolling). */
+const GESTURE_MS = 250;
 
 interface Layout {
   offsets: number[];
@@ -166,13 +168,32 @@ function VirtualListInner<T>(
   useEffect(() => () => {
     ro.current?.disconnect();
     ro.current = null;
+    if (followRaf.current) cancelAnimationFrame(followRaf.current);
   }, []);
 
   // The last committed layout, and where the reader is in it. Written by the commit effect and by the scroll handler,
   // and read by the handle, so a scroll or a call never sees a layout older than the one on screen.
   const layout = useRef<Layout>({ offsets: [0], keys: [], index: new Map() });
-  const follow = useRef({ stuck: stickToEnd, anchor: null as { key: string; screen: number } | null, reached: false });
+  // `following` is an explicit mode, not a geometry read: it is released only by a genuine reader gesture that leaves the end
+  // (see the scroll handler), and re-engaged when the reader returns within STICK_PX of the end. A programmatic jump or a
+  // measurement reflow that clamps the scroll never changes it, so a settling list of thousands of rows cannot shake it loose.
+  const follow = useRef({ following: stickToEnd, anchor: null as { key: string; screen: number } | null, reached: false });
   const latest = useRef({ onReachStart });
+  // When the reader last drove the scroll by a wheel/key/pointer/touch gesture. Scroll events close to it are the reader's;
+  // the rest (our jumps, measurement reflows) are not, and must not release following.
+  const lastGesture = useRef(-Infinity);
+
+  const followRaf = useRef(0);
+  const followBurst = useRef(0);
+
+  /**
+   * The scroll position of the true end: the real rendered extent (`scrollHeight`) when the browser gives it, else the list's
+   * layout total (tests, first paint). The "already at the end" guard and the follow jump compare against it with a 1px tolerance.
+   */
+  const endTop = (el: HTMLElement): number => {
+    const base = el.scrollHeight > 0 ? el.scrollHeight : layout.current.offsets[layout.current.keys.length];
+    return Math.max(0, base - el.clientHeight);
+  };
 
   /** Scrolls to `top`, clamped to the layout's extent, and renders the window for it. */
   const jumpTo = (top: number) => {
@@ -185,8 +206,39 @@ function VirtualListInner<T>(
   };
 
   /**
-   * Records where the reader is: at the end, which row is first on screen and where, and whether the start is reached.
-   * The start is reached once per arrival: `onReachStart` is not called again until the reader is away from it.
+   * Bring the end to the bottom of the viewport when it has dropped below it (content grew), as a DOM side effect, then sync the
+   * window. Converges synchronously for the common case; but if re-pinning does not settle within a few synchronous passes — a
+   * real scrollbar reflow can make the rendered extent wobble as the boundary row mounts and unmounts — hand the rest off to an
+   * animation frame, so the correction becomes one-per-frame and cannot recurse into a React #185 update loop. When already at
+   * the end (1px tolerance) nothing changes and no re-render is scheduled, so a settled list does no more work.
+   */
+  const followEnd = (el: HTMLElement) => {
+    const max = endTop(el);
+    if (max - el.scrollTop > 1) el.scrollTop = max;
+    if (el.scrollTop === scrollTop) { followBurst.current = 0; return; }
+    if (followBurst.current < 3) {
+      followBurst.current += 1;
+      setScrollTop(el.scrollTop);
+    } else {
+      requestFollowEnd();
+    }
+  };
+
+  /** Follow the end on the next animation frame (coalesced), after resetting the synchronous burst count. */
+  const requestFollowEnd = () => {
+    if (followRaf.current || typeof requestAnimationFrame === "undefined") return;
+    followRaf.current = requestAnimationFrame(() => {
+      followRaf.current = 0;
+      followBurst.current = 0;
+      const el = box.current;
+      if (el && stickToEnd && follow.current.following) followEnd(el);
+    });
+  };
+
+  /**
+   * Records which row is first on screen and where, and whether the start is reached. (Following the end is tracked separately,
+   * by the scroll handler, so geometry never releases it.) The start is reached once per arrival: `onReachStart` is not called
+   * again until the reader is away from it.
    */
   const snapshot = () => {
     const el = box.current;
@@ -194,9 +246,7 @@ function VirtualListInner<T>(
     const lay = layout.current;
     const top = el.scrollTop;
     const vh = el.clientHeight;
-    const total = lay.offsets[lay.keys.length];
     const f = follow.current;
-    f.stuck = total - top - vh < STICK_PX;
     let lo = 0;
     let hi = lay.keys.length;
     while (lo < hi) {
@@ -205,10 +255,11 @@ function VirtualListInner<T>(
       else hi = mid;
     }
     f.anchor = lo < lay.keys.length ? { key: lay.keys[lo], screen: lay.offsets[lo] - top } : null;
-    // Without a layout (no viewport yet) there is no start to reach.
+    // Without a layout (no viewport yet) there is no start to reach. A list that is following its end is not at its start, even
+    // on the first frame before the follow jump has run, so it never reaches the start while following.
     if (vh <= 0) return;
     if (top >= START_PX) f.reached = false;
-    else if (!f.reached) {
+    else if (!f.reached && !(stickToEnd && f.following)) {
       f.reached = true;
       latest.current.onReachStart?.();
     }
@@ -222,8 +273,8 @@ function VirtualListInner<T>(
     const el = box.current;
     if (!el) return;
     const f = follow.current;
-    if (stickToEnd && f.stuck) {
-      jumpTo(total);
+    if (stickToEnd && f.following) {
+      followEnd(el);
     } else if (keepAnchor && f.anchor) {
       const i = index.get(f.anchor.key);
       if (i !== undefined) {
@@ -251,8 +302,9 @@ function VirtualListInner<T>(
       if (opts?.highlight) setFlash((f) => ({ key, n: (f?.n ?? 0) + 1 }));
     },
     scrollToEnd() {
-      follow.current.stuck = true;
-      jumpTo(layout.current.offsets[layout.current.keys.length]);
+      follow.current.following = true;
+      const el = box.current;
+      if (el) followEnd(el);
       snapshot();
     },
   }));
@@ -271,8 +323,29 @@ function VirtualListInner<T>(
       className={`vlist ${className}`}
       role={role}
       aria-label={aria["aria-label"]}
+      // A gesture marks the scrolls that follow as the reader's own (covers inertial scrolling), so only the reader — never a
+      // programmatic jump or a measurement reflow — can release following.
+      onWheel={() => (lastGesture.current = performance.now())}
+      onKeyDown={() => (lastGesture.current = performance.now())}
+      onPointerDown={() => (lastGesture.current = performance.now())}
+      onTouchStart={() => (lastGesture.current = performance.now())}
+      onTouchMove={() => (lastGesture.current = performance.now())}
       onScroll={() => {
-        setScrollTop(box.current?.scrollTop ?? 0);
+        const el = box.current;
+        if (!el) return;
+        const top = el.scrollTop;
+        setScrollTop(top);
+        if (stickToEnd) {
+          const f = follow.current;
+          const nearEnd = endTop(el) - top <= STICK_PX;
+          // Release only on a genuine reader gesture that left the end; re-engage when the reader returns to the end. Our own
+          // jumps and measurement reflows (no recent gesture) never release it.
+          if (f.following) {
+            if (!nearEnd && performance.now() - lastGesture.current < GESTURE_MS) f.following = false;
+          } else if (nearEnd) {
+            f.following = true;
+          }
+        }
         snapshot();
       }}
     >

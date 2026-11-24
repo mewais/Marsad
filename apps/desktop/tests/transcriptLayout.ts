@@ -23,10 +23,15 @@ export function layoutTranscript(px = 400): () => void {
 
 export const transcript = (): HTMLElement => document.querySelector(".transcript") as HTMLElement;
 
-/** Scrolls the transcript to `top`, as a reader's scroll does: the position is set and the scroll event fires. */
+/**
+ * Scrolls the transcript to `top`, as a reader's scroll does: a wheel gesture precedes the move (so a list that follows the end
+ * releases following, the way it does for a real reader and not for a programmatic reflow), the position is set, and the scroll
+ * event fires.
+ */
 export function scrollTranscript(top: number) {
   const el = transcript();
   act(() => {
+    fireEvent.wheel(el);
     el.scrollTop = top;
     fireEvent.scroll(el);
   });
