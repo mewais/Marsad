@@ -152,7 +152,7 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
         }
     };
     until(&mut fleet, "the remote session in the fleet", |e| {
-        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == box_id && session.id == id && session.phase.name() == "needs_you")
+        session_is(e, box_id.as_str(), &id, |s| s.phase.name() == "needs_you")
     })
     .await;
 
@@ -210,7 +210,7 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
         "no gap, no duplicate across the link drop"
     );
     until(&mut fleet, "the finished turn in the fleet", |e| {
-        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == box_id && session.id == id && session.turns_completed == 1)
+        session_is(e, box_id.as_str(), &id, |s| s.turns_completed == 1)
     })
     .await;
     rt.delete(&id).await.unwrap();

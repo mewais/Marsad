@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 
 use common::*;
 use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
-use marsad_proto::fleet::FleetEvent;
 use marsad_proto::hosts::HostDraft;
 use marsad_proto::layout::Layout;
 use marsad_proto::{HostId, LinkState};
@@ -165,7 +164,7 @@ async fn failing_scenario(started: Arc<Mutex<Started>>) {
     .await
     .unwrap();
     until(&mut fleet, "box connected", |e| {
-        matches!(e, FleetEvent::Link { host, state } if *host == box_id && LinkState::is_connected(state))
+        host_connected(e, box_id.as_str())
     })
     .await;
     let remote_work = sshd.remote_home.join("w");

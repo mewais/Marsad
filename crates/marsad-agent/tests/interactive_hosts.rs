@@ -237,8 +237,15 @@ fn connected(e: &FleetEvent, host: &str) -> bool {
     link_is(e, host, LinkState::is_connected)
 }
 
+/// Whether `host` is (or, in a fresh subscription's `Reset`, already is) marked interactive `on`.
 fn interactive_mark(e: &FleetEvent, host: &str, on: bool) -> bool {
-    matches!(e, FleetEvent::HostUpserted { host: h } if h.id.as_str() == host && h.interactive_auth == on)
+    match e {
+        FleetEvent::HostUpserted { host: h } => h.id.as_str() == host && h.interactive_auth == on,
+        FleetEvent::Reset { hosts } => hosts
+            .iter()
+            .any(|h| h.host.id.as_str() == host && h.host.interactive_auth == on),
+        _ => false,
+    }
 }
 
 fn parked(e: &FleetEvent, host: &str, held: bool) -> bool {
@@ -255,7 +262,7 @@ fn reconnecting(e: &FleetEvent, host: &str) -> bool {
 
 /// Events that say somebody is asked or the host waits for somebody.
 fn asks_or_waits(e: &FleetEvent, host: &str) -> bool {
-    matches!(e, FleetEvent::AuthPrompt { host: h, prompt: Some(_) } if h.as_str() == host)
+    auth_prompt_is(e, host, |p| p.is_some())
         || link_is(e, host, |s| matches!(s, LinkState::AuthNeeded { .. }))
 }
 
@@ -539,7 +546,7 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
     let id = r.id.clone();
     let mut g = launch_gated(&r).await;
     until(&mut r.fleet, "the session in the fleet", |e| {
-        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == id && session.id == g.id && session.phase.name() == "needs_you")
+        session_is(e, id.as_str(), &g.id, |s| s.phase.name() == "needs_you")
     })
     .await;
 
@@ -671,7 +678,7 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
         "no gap, no duplicate across the drop and the click"
     );
     until(&mut r.fleet, "the finished turn in the fleet", |e| {
-        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == id && session.id == g.id && session.turns_completed == 1)
+        session_is(e, id.as_str(), &g.id, |s| s.turns_completed == 1)
     })
     .await;
     g.rt.delete(&g.id).await.unwrap();
@@ -1112,7 +1119,7 @@ async fn a_hub_restart_finds_the_open_connection_and_reconnects_without_a_prompt
     let id = r.id.clone();
     let g = launch_gated(&r).await;
     until(&mut r.fleet, "the session in the fleet", |e| {
-        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == id && session.id == g.id && session.phase.name() == "needs_you")
+        session_is(e, id.as_str(), &g.id, |s| s.phase.name() == "needs_you")
     })
     .await;
     let seen = g.seen.clone();

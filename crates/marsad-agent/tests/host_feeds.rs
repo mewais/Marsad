@@ -31,7 +31,7 @@ use wasit_control::{
 };
 use wasit_runtime::wire::{topics as rt_topics, HostEvent};
 
-use common::{TempDir, T};
+use common::{link_is, TempDir, T};
 
 const HOST: &str = "box";
 const WASL_TASKS: &str = wasl_proto::topics::TASKS;
@@ -358,7 +358,7 @@ fn link_up(h: &FleetHost) -> bool {
 }
 
 fn link_event(e: &FleetEvent, connected: bool) -> bool {
-    matches!(e, FleetEvent::Link { host, state } if host.as_str() == HOST && state.is_connected() == connected)
+    link_is(e, HOST, |s| s.is_connected() == connected)
 }
 
 fn sessions_event(e: &FleetEvent) -> bool {

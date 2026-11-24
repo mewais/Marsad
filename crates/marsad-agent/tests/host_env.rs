@@ -377,7 +377,7 @@ async fn host_environment_settings_over_ssh_and_local() {
     let pid = c.daemon_info(Some(&box_id)).await.unwrap().pid;
     stop_daemon(pid).await;
     until(&mut fleet, "box reconnecting", |e| {
-        matches!(e, FleetEvent::Link { host, state } if host.as_str() == "box" && !state.is_connected())
+        link_is(e, "box", |s| !s.is_connected())
     })
     .await;
     until(&mut fleet, "box connected again", |e| connected(e, "box")).await;

@@ -189,10 +189,6 @@ async fn nothing_opens_a_console_window_from_a_consoleless_hub() {
 
 // ── WSL end to end ──────────────────────────────────────────────────────────
 
-fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
-    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
-}
-
 async fn until(
     f: &mut Subscription<FleetEvent>,
     what: &str,

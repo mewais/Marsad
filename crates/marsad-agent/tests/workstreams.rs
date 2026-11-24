@@ -14,7 +14,6 @@ use std::time::Duration;
 use common::*;
 use marsad_client::{MarsadClient, Subscription};
 use marsad_proto::agentconfig::{ItemState, LaunchRequest, OverrideLayer};
-use marsad_proto::fleet::FleetEvent;
 use marsad_proto::hosts::HostDraft;
 use marsad_proto::wasl::{
     DelegateReply, EdgePolicy, HandoffDecision, Limits, TaskBrief, TaskId, TaskState, TaskStates,
@@ -30,6 +29,7 @@ use marsad_proto::{
 };
 use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
+use wasit_runtime::wire::SessionSnapshot;
 
 fn hub_client(dir: &Path) -> MarsadClient {
     let mut cfg = client_config(dir, wasit_control::Hello::new("test", "gui", "gui"));
@@ -249,18 +249,12 @@ async fn three_nodes_across_local_and_ssh_host() {
     })
     .await
     .unwrap();
-    let fut = async {
-        loop {
-            if let FleetEvent::Link { host, state } = next(&mut fleet).await.1 {
-                if host == bx && state.is_connected() {
-                    return;
-                }
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(120), fut)
-        .await
-        .expect("box connected");
+    // The fleet subscription opens before the host connects, so this sees the link as a `Link`
+    // event; `host_connected` also accepts a `Reset` that already shows it connected.
+    until(&mut fleet, "box connected", |e| {
+        host_connected(e, bx.as_str())
+    })
+    .await;
 
     let work = d.path().join("w");
     std::fs::create_dir_all(&work).unwrap();
@@ -343,16 +337,21 @@ async fn three_nodes_across_local_and_ssh_host() {
     // The same gates are on the orchestrator's snapshot in the fleet.
     let fut = async {
         loop {
-            if let FleetEvent::SessionUpserted { host, session } = next(&mut fleet).await.1 {
-                let handoffs = session
-                    .pending_gates
+            let (_, e) = next(&mut fleet).await;
+            let handoffs = |s: &SessionSnapshot| {
+                s.pending_gates
                     .iter()
                     .filter(|g| matches!(g.gate, GateRequest::Handoff { .. }))
-                    .count();
-                if host == hub && session.id == orch.session && handoffs == 2 {
-                    assert_eq!(session.phase.name(), "needs_you");
-                    return;
-                }
+                    .count()
+            };
+            if session_is(&e, hub.as_str(), &orch.session, |s| handoffs(s) == 2) {
+                // The state is either the event's snapshot or the subscription's `Reset`.
+                assert!(
+                    session_is(&e, hub.as_str(), &orch.session, |s| s.phase.name()
+                        == "needs_you"),
+                    "{e:?}"
+                );
+                return;
             }
         }
     };

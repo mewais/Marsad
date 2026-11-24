@@ -753,11 +753,9 @@ mod signin {
     }
 
     pub async fn prompt(f: &mut Subscription<FleetEvent>) -> AuthPrompt {
-        match until(
-            f,
-            "a sign-in prompt",
-            |e| matches!(e, FleetEvent::AuthPrompt { host, prompt: Some(_) } if host.as_str() == HOST),
-        )
+        match until(f, "a sign-in prompt", |e| {
+            auth_prompt_is(e, HOST, |p| p.is_some())
+        })
         .await
         {
             FleetEvent::AuthPrompt {
@@ -1050,10 +1048,6 @@ mod connect {
         MarsadClient::connect(cfg)
     }
 
-    fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
-        matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
-    }
-
     fn draft(name: &str, id: &str, kind: HostKind) -> HostDraft {
         HostDraft {
             name: name.into(),
@@ -1197,7 +1191,7 @@ mod connect {
         // The connect taught the registry the host's machine (the platform came with the
         // report): wait for it on the fleet, then apply settings explicitly.
         until(&mut fleet, "the machine learned", |e| {
-            matches!(e, FleetEvent::HostUpserted { host } if host.id.as_str() == "box" && host.machine.is_some())
+            host_is(e, "box", |h| h.machine.is_some())
         })
         .await;
         let saved = c
@@ -2179,7 +2173,7 @@ mod connect {
         })
         .await;
         until(&mut fleet, "the machine learned", |e| {
-            matches!(e, FleetEvent::HostUpserted { host } if host.id.as_str() == "box" && host.machine.is_some())
+            host_is(e, "box", |h| h.machine.is_some())
         })
         .await;
 

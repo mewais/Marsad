@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use marsad_client::{ClientConfig, MarsadClient, Subscription};
 use marsad_proto::fleet::{FleetEvent, FleetLink};
-use marsad_proto::hosts::AuthPrompt;
+use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::layout::Layout;
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
 use marsad_proto::{AgentEvent, LinkState};
@@ -19,6 +19,7 @@ use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use wasit_control::Hello;
 use wasit_fake_cli::scenario::Scenario;
+use wasit_runtime::wire::{SessionId, SessionSnapshot};
 
 pub const T: Duration = Duration::from_secs(60);
 pub const DRIVERS: [&str; 4] = ["claude", "codex", "opencode", "kilo"];
@@ -412,23 +413,47 @@ pub async fn until(
         .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
 
-/// Whether `e` is a link event of `host` whose state satisfies `p`.
+/// Whether the fleet event `e` shows `host`'s link in a state satisfying `p`: a `Link` event for
+/// the host, or the `Reset` a fresh subscription starts with (which carries every host's current
+/// link; no `Link` event follows for a state that was reached before the subscription opened).
 pub fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
-    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
+    match e {
+        FleetEvent::Link { host: h, state } => h.as_str() == host && p(state),
+        FleetEvent::Reset { hosts } => hosts.iter().any(|h| {
+            h.host.id.as_str() == host && matches!(&h.link, FleetLink::Remote { state } if p(state))
+        }),
+        _ => false,
+    }
+}
+
+/// Whether the fleet event `e` shows `host`'s sign-in prompt in a state satisfying `p` (`None` =
+/// no prompt waiting): an `AuthPrompt` event for the host, or the `Reset` of a fresh subscription,
+/// which carries the prompt a host is waiting on.
+pub fn auth_prompt_is(e: &FleetEvent, host: &str, p: impl Fn(Option<&AuthPrompt>) -> bool) -> bool {
+    match e {
+        FleetEvent::AuthPrompt { host: h, prompt } => h.as_str() == host && p(prompt.as_ref()),
+        FleetEvent::Reset { hosts } => hosts
+            .iter()
+            .any(|h| h.host.id.as_str() == host && p(h.auth_prompt.as_ref())),
+        _ => false,
+    }
 }
 
 /// The next sign-in prompt of `host`.
 pub async fn prompt(f: &mut Subscription<FleetEvent>, host: &str) -> AuthPrompt {
-    match until(
-        f,
-        "a sign-in prompt",
-        |e| matches!(e, FleetEvent::AuthPrompt { host: h, prompt: Some(_) } if h.as_str() == host),
-    )
-    .await
-    {
+    let e = until(f, "a sign-in prompt", |e| {
+        auth_prompt_is(e, host, |p| p.is_some())
+    })
+    .await;
+    match e {
         FleetEvent::AuthPrompt {
             prompt: Some(p), ..
         } => p,
+        FleetEvent::Reset { hosts } => hosts
+            .into_iter()
+            .find(|h| h.host.id.as_str() == host)
+            .and_then(|h| h.auth_prompt)
+            .expect("the reset shows the prompt"),
         _ => unreachable!(),
     }
 }
@@ -466,6 +491,38 @@ pub async fn next<T: DeserializeOwned>(s: &mut Subscription<T>) -> (wasit_contro
         Ok(Some(Err(e))) => panic!("subscription error: {e}"),
         Ok(None) => panic!("subscription ended"),
         Err(_) => panic!("timed out waiting for an event"),
+    }
+}
+
+/// Whether the fleet event `e` shows a session of `host` (id `id`) in a state satisfying `p`: a
+/// `SessionUpserted` for it, or the `Reset` of a fresh subscription, which carries every session
+/// the hub knows of (the sessions of a host are its last known ones).
+pub fn session_is(
+    e: &FleetEvent,
+    host: &str,
+    id: &SessionId,
+    p: impl Fn(&SessionSnapshot) -> bool,
+) -> bool {
+    match e {
+        FleetEvent::SessionUpserted { host: h, session } => {
+            h.as_str() == host && session.id == *id && p(session)
+        }
+        FleetEvent::Reset { hosts } => hosts
+            .iter()
+            .any(|h| h.host.id.as_str() == host && h.sessions.iter().any(|s| s.id == *id && p(s))),
+        _ => false,
+    }
+}
+
+/// Whether the fleet event `e` shows `host`'s entry in a state satisfying `p`: a `HostUpserted`
+/// for it, or the `Reset` of a fresh subscription (which carries every host's current entry).
+pub fn host_is(e: &FleetEvent, host: &str, p: impl Fn(&HostEntry) -> bool) -> bool {
+    match e {
+        FleetEvent::HostUpserted { host: h } => h.id.as_str() == host && p(h),
+        FleetEvent::Reset { hosts } => hosts
+            .iter()
+            .any(|h| h.host.id.as_str() == host && p(&h.host)),
+        _ => false,
     }
 }
 

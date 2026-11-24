@@ -45,10 +45,6 @@ async fn until(
         .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
 
-fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
-    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
-}
-
 fn idle_scenario() -> Scenario {
     Scenario::builder()
         .turn(Turn::builder().say("hello"))
@@ -98,11 +94,13 @@ async fn two_machines_sharing_a_home_keep_their_own_daemons_and_sessions() {
         .await
         .unwrap();
     }
+    // Each host counts once, from a `Link` event or from the `Reset` a fresh subscription starts
+    // with (a host that connected before this wait is only in the `Reset`).
     let seen = std::sync::Mutex::new(std::collections::BTreeSet::new());
     until(&mut fleet, "a and b connected", |e| {
-        if let FleetEvent::Link { host, state } = e {
-            if state.is_connected() {
-                seen.lock().unwrap().insert(host.to_string());
+        for id in ["a", "b"] {
+            if host_connected(e, id) {
+                seen.lock().unwrap().insert(id);
             }
         }
         seen.lock().unwrap().len() == 2
