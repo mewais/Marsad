@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use marsad_client::{ClientConfig, MarsadClient, Subscription};
-use marsad_proto::fleet::FleetEvent;
+use marsad_proto::fleet::{FleetEvent, FleetLink};
 use marsad_proto::hosts::AuthPrompt;
 use marsad_proto::layout::Layout;
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
@@ -466,6 +466,22 @@ pub async fn next<T: DeserializeOwned>(s: &mut Subscription<T>) -> (wasit_contro
         Ok(Some(Err(e))) => panic!("subscription error: {e}"),
         Ok(None) => panic!("subscription ended"),
         Err(_) => panic!("timed out waiting for an event"),
+    }
+}
+
+/// Whether the fleet shows `host` connected at `e`: a `Link` event to connected, or the fleet's
+/// `Reset` (the first event of every fresh subscription, which carries every host's current
+/// state) with the host already connected in it. A subscription is opened when a test starts
+/// waiting, so a host that connected before that comes only as the `Reset`; no `Link` event
+/// follows for it.
+pub fn host_connected(e: &FleetEvent, host: &str) -> bool {
+    match e {
+        FleetEvent::Link { host: h, state } => h.as_str() == host && state.is_connected(),
+        FleetEvent::Reset { hosts } => hosts.iter().any(|h| {
+            h.host.id.as_str() == host
+                && matches!(&h.link, FleetLink::Remote { state } if state.is_connected())
+        }),
+        _ => false,
     }
 }
 

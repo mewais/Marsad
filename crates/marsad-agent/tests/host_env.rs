@@ -87,7 +87,7 @@ async fn until(f: &mut Subscription<FleetEvent>, what: &str, pred: impl Fn(&Flee
 }
 
 fn connected(e: &FleetEvent, host: &str) -> bool {
-    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && state.is_connected())
+    host_connected(e, host)
 }
 
 fn agent_of<'a>(t: &'a EnvironmentTest, d: &str) -> &'a DriverInventory {

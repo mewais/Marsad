@@ -36,8 +36,7 @@ async fn connected(fleet: &mut Subscription<FleetEvent>, host: &str) {
         let e = tokio::time::timeout_at(deadline, next(fleet))
             .await
             .expect("host connected in time");
-        if matches!(&e.1, FleetEvent::Link { host: h, state } if h.as_str() == host && state.is_connected())
-        {
+        if host_connected(&e.1, host) {
             return;
         }
     }
