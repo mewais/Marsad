@@ -168,7 +168,9 @@ function richAuthTranscript(b: Builder, plan: PlanEntry[]) {
     file_path: "apps/api/src/server.ts",
     old_string: "app.use(session({ store: new RedisStore({ client }), secret: env.SESSION_SECRET }))\napp.use(passport.session())",
     new_string: "app.use(legacySessionCompat({ client, until: env.LEGACY_COOKIE_UNTIL }))\napp.use(authMiddleware({ issuer: env.AUTH_ISSUER, cookie: 'll_session' }))",
-  }, true, "Edited apps/api/src/server.ts");
+  }, true, "Edited apps/api/src/server.ts", 3000, [
+    { type: "diff", path: "apps/api/src/server.ts", old_text: "app.use(session({ store: new RedisStore({ client }), secret: env.SESSION_SECRET }))\napp.use(passport.session())", new_text: "app.use(legacySessionCompat({ client, until: env.LEGACY_COOKIE_UNTIL }))\napp.use(authMiddleware({ issuer: env.AUTH_ISSUER, cookie: 'll_session' }))" },
+  ]);
   b.tool("Bash", "c4", { command: "pnpm --filter api test auth" }, false, "27 passed · 2 failed · 8.4s");
   b.agent({ type: "assistant_delta", text: "The two failures are the cookie-compat tests. Before I fix them I need the session table migration, and a decision on legacy cookies.", message_id: "m2" }, 3000);
   b.agent({ type: "plan_updated", entries: [
@@ -204,7 +206,9 @@ function mediaTranscript(b: Builder, sessionId: string) {
   b.agent({ type: "assistant_delta", text: "Done. The chart is in `out/chart.svg` (a PNG copy in `out/chart.png`), the write-up is `report.pdf`, and `preview.html` shows both. See README.md for notes.", message_id: "mm1" }, 2000);
   b.agent({ type: "assistant_content", parts: [{ type: "file", source: { source: "path", path: "preview.html" }, name: "preview.html", mime: "text/html", uri: "file:///home/you/src/reports/preview.html" }], message_id: "mm1" }, 300);
   b.agent({ type: "assistant_delta", text: "I also added a site and a helper:\n\n```ts\nexport function total(rows: number[]): number {\n  // sum the quarters\n  return rows.reduce((a, b) => a + b, 0);\n}\n```\n\n- `site/index.html` loads `site/style.css` and an image (guide in `docs/guide.md`)\n  - nested item with `inline code`\n- the helper is at `src/app.ts:2`, the notes at `../notes/todo.md` and the folder `../notes/`, your SSH config at `~/.ssh/config`\n\n| quarter | revenue |\n|---|---|\n| Q1 | 1200 |\n\nAnd a very_long_unbroken_token_that_should_wrap_instead_of_overflowing_the_message_column_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.", message_id: "mm2" }, 2000);
-  b.tool("Edit", "m6", { file_path: "src/app.ts", old_string: "return rows.length", new_string: "return rows.reduce((a, b) => a + b, 0)" }, true, "Edited src/app.ts");
+  b.tool("Edit", "m6", { file_path: "src/app.ts", old_string: "return rows.length", new_string: "return rows.reduce((a, b) => a + b, 0)" }, true, "Edited src/app.ts", 3000, [
+    { type: "diff", path: "src/app.ts", old_text: "return rows.length", new_text: "return rows.reduce((a, b) => a + b, 0)" },
+  ]);
   b.tool("Write", "m7", { file_path: "src/app.ts", content: "export const x: number = 1;\n// done\n" }, true, "File created successfully at: src/app.ts");
   b.tool("Bash", "m8", { command: "git diff --stat && git diff src/app.ts" }, true, "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,3 +1,3 @@\n export const x = 1;\n-const y = 2;\n+const y = 3;\n");
   b.agent({ type: "turn_completed", was_interrupted: false, num_turns: 6, usage: { input_tokens: 2000, output_tokens: 400, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.12 } }, 800);

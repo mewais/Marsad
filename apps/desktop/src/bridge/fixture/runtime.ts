@@ -4,6 +4,7 @@ import { projectEvent } from "./diagnostics";
 import type { BuiltEarlier } from "./earlier";
 import type { SessionEventKind } from "./transcripts";
 import { endAllWork, reduceWork } from "./work";
+import type { LocalShellRequest } from "../api";
 
 /** Fixture-only: one scripted session per entry; reacts to commands like an agent would. */
 
@@ -172,6 +173,20 @@ export class SessionSim {
         this.journal(e, c, trace);
         this.stopTask(e, c.task_id);
         return { outcome: "sent" };
+      case "run_shell": {
+        // Only an agent whose driver can run a command in its own shell takes one. Its output reaches the transcript as the
+        // agent's own tool row (`local_shell`, origin driver), as it does in the daemon.
+        if (!e.snap.capabilities.run_shell) throw err("unsupported", "this agent cannot run a shell command in its own shell", { error: "unsupported" });
+        this.emit(e, { kind: "agent", event: { type: "local_shell", command: c.line, cwd: e.snap.cwd ?? null, exit_code: 0, output: `fixture: ran ${c.line}\n`, output_truncated: false, origin: "driver" } });
+        this.h.publish(e);
+        return { outcome: "sent" };
+      }
+      case "compact":
+        // The CLI compacts its own context and reports what it dropped; the transcript says so (`compaction`), with the figures it knows.
+        this.journal(e, c, trace);
+        this.emit(e, { kind: "agent", event: { type: "compaction", info: { trigger: "manual", pre_tokens: 120_400, post_tokens: 40_100, cumulative_dropped_tokens: 80_300, duration_ms: 2100 } } });
+        this.h.publish(e);
+        return { outcome: "sent" };
       case "set_model":
         this.journal(e, c, trace);
         this.emit(e, { kind: "agent", event: { type: "model_changed", model: c.model } });
@@ -188,6 +203,14 @@ export class SessionSim {
   /** A process is running (or starting) for the session. */
   private running(e: Entry): boolean {
     return ["starting", "idle", "working", "needs_you"].includes(e.snap.phase.state);
+  }
+
+  /** A command the user ran on the session's host, journaled as the session's own event (origin host). Refused once the session has ended. */
+  localShell(e: Entry, r: LocalShellRequest): Record<string, never> {
+    if (!this.running(e)) throw err("not_running", `the session is not running: the session is ${e.snap.phase.state}`, { error: "not_running", reason: `the session is ${e.snap.phase.state}` });
+    this.emit(e, { kind: "agent", event: { type: "local_shell", command: r.command, cwd: r.cwd, exit_code: r.exit_code, output: r.output, output_truncated: r.output_truncated, origin: "host" } });
+    this.h.publish(e);
+    return {};
   }
 
   /**

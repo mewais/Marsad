@@ -115,6 +115,8 @@ export function PartsView({ parts }: { parts: ContentPart[] }) {
     <div className="parts" data-testid="parts">
       {parts.map((p, i) => {
         if (p.type === "text") return <div key={i} className="faint fs12">{p.text}</div>;
+        // A file change is drawn by the tool call that made it (as a diff), not as a file to open.
+        if (p.type === "diff") return null;
         const t = targetOf(p.source);
         const size = p.source.source === "blob" ? p.source.size : null;
         if (p.type === "image") {

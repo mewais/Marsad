@@ -72,11 +72,11 @@ export function TranscriptList({ sessionKey, host, id, scope, driver, followKey,
           </div>
         );
       case "earlier":
-        return <div className="tr-item hist-part" data-part="earlier"><TranscriptItem item={e.row} driver={driver} /></div>;
+        return <div className="tr-item hist-part" data-part="earlier"><TranscriptItem item={e.row} driver={driver} part="earlier" scope={scope} /></div>;
       case "earlier-end":
         return <div className="tr-item">{shown ? <EarlierEnd earlier={shown.info} /> : null}</div>;
       case "row":
-        return <div className="tr-item" data-part="live"><TranscriptItem item={e.row} driver={driver} /></div>;
+        return <div className="tr-item" data-part="live"><TranscriptItem item={e.row} driver={driver} part="live" scope={scope} /></div>;
       case "tail":
         return (
           <div className="tr-item tr-tail">

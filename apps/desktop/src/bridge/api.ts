@@ -2,6 +2,7 @@ import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, Unsubscribe
 import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
+import { topicPrefixes } from "./generated/names";
 
 /**
  * A new trace id for one user action: `u-` and 16 hex digits from the platform's random source
@@ -15,6 +16,18 @@ export function newTraceId(): string {
 /** What `desktop.export_save` answers: where the export was saved, or that the user cancelled. */
 export type ExportSaved = { path: string } | { saved: false };
 
+/*
+ * `host.exec.*`, `session.local_shell` and `sessions.fork` payloads and names: generated from the Rust
+ * definitions (`./generated`, via `wire`). Re-exported here so the callers of this module keep their imports.
+ */
+export type { ExecEvent, ExecStarted, ExecStartRequest, ForkSession, LocalShellRecord, LocalShellRequest } from "./wire";
+export const EXEC_START = M.EXEC_START;
+export const EXEC_CANCEL = M.EXEC_CANCEL;
+export const SESSION_LOCAL_SHELL = M.SESSION_LOCAL_SHELL;
+export const SESSIONS_FORK = M.SESSIONS_FORK;
+/** The output topic of one `host.exec` execution (`topicPrefixes.EXEC_OUTPUT`, generated). */
+export const execOutputTopic = (execId: string) => `${topicPrefixes.EXEC_OUTPUT}${execId}`;
+
 /** A file chosen in the desktop shell's native picker. */
 export interface PickedFile {
   path: string;
@@ -24,6 +37,7 @@ export interface PickedFile {
 
 /** Method name → [params, result]. The only place method strings meet payload types. */
 export interface MethodMap {
+  [M.SESSIONS_FORK]: [W.ForkSession, W.CreateSessionReply];
   [M.HOST_INFO]: [void, W.HostInfo];
   [M.DRIVERS_INVENTORY]: [W.InventoryRequest, W.InventoryReply];
   [M.DRIVERS_REFRESH]: [W.RefreshRequest, W.Ack];
@@ -126,6 +140,8 @@ export function createApi(b: Backend) {
     history: (host: W.HostId, r: W.HistoryRequest) => call(b, M.SESSION_HISTORY, r, { host }),
     /** The session's trail (content-free facts, in the host's order), the newest `limit` before `before`. */
     trailPage: (host: W.HostId, r: W.TrailRequest) => call(b, M.SESSION_TRAIL_PAGE, r, { host }),
+    /** Fork a session on its host: a new session that copies its conversation; the parent is left unchanged. */
+    forkSession: (host: W.HostId, r: W.ForkSession) => call(b, M.SESSIONS_FORK, r, { host }),
     continueSession: (host: W.HostId, id: W.SessionId, trace?: string) => call(b, M.SESSIONS_CONTINUE, { id }, { host, trace }),
     stopSession: (host: W.HostId, id: W.SessionId, trace?: string) => call(b, M.SESSIONS_STOP, { id }, { host, trace }),
     deleteSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_DELETE, { id }, { host }),
@@ -161,6 +177,17 @@ export function createApi(b: Backend) {
        */
       exportSave: (id: string) => b.request<ExportSaved>("desktop.export_save", { id }),
     },
+    /** A shell command on a host, in a folder there (`host.exec.*`). The output is `exec.output`. */
+    exec: {
+      start: (host: W.HostId, r: W.ExecStartRequest) => b.request<W.ExecStarted>(M.EXEC_START, r, { host }),
+      /** Ends the command's whole process group; the output stream then ends with `exited`. */
+      cancel: (host: W.HostId, execId: string) => b.request<W.Ack>(M.EXEC_CANCEL, { exec_id: execId }, { host }),
+      /** From the first event (the host keeps the output it produced, up to its cap), then live; ends after `exited`. */
+      output: (host: W.HostId, execId: string, cb: (e: W.ExecEvent) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(execOutputTopic(execId), { host, from: 0 }, (e) => cb(e as W.ExecEvent), onEnd),
+    },
+    /** Journal a command the user ran on the session's host, so it appears in the session's conversation. */
+    localShell: (host: W.HostId, r: W.LocalShellRequest) => b.request<W.Ack>(M.SESSION_LOCAL_SHELL, r, { host }),
     /** Record events in the app's diagnostics log (see `Backend.diagLog`). */
     diagLog: (events: readonly W.UiEvent[]) => b.diagLog(events),
     /** Desktop shell: solid or translucent window background (native backdrop where the OS has one). */

@@ -10,6 +10,8 @@ import { toast } from "../../ui/toast";
 import { ContinueButton } from "../common/SessionBits";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
+import { CompactButton, ForkButton } from "./SessionActions";
+import { ForkedBanner } from "./ForkedBanner";
 import { MediaCtx } from "../media/Parts";
 import { SessionFacts } from "./SessionFacts";
 import { SessionWork } from "./SessionWork";
@@ -136,6 +138,8 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
             <>
               <Button size="sm" icon="pause" pending={interruptPending} blocked={reach} disabled={!canInterrupt(snap)} title={interruptWords(snap)} onClick={() => void actions.interrupt(key)}>Interrupt</Button>
               <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => void actions.endSession(key)}>End session</Button>
+              <CompactButton sessionKey={key} snap={snap} blocked={reach} />
+              <ForkButton host={host} sessionKey={key} snap={snap} blocked={reach} />
             </>
           ) : (
             <>
@@ -157,6 +161,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
           <span className="kv"><Icon name="coin" size="sm" /><span className="tnum">{usage.reportsCost ? money(usage.cost) : "n/a"}</span><span className="faint">· {mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}</span></span>
         </div>
         {v.stale ? <div className="banner warn sd-stale" role="status" data-testid="stale-note"><Icon name="clock" size="sm" /><div className="bt"><b>Last known state.</b> <span>{reach}</span></div></div> : null}
+        <ForkedBanner host={host} snap={snap} />
         <Tabs tabs={tabs} value={tab} label="Session sections" onChange={(t) => nav(sessionPath(host, id, t))} />
       </div>
       {tab !== "activity" ? (

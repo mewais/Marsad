@@ -2,34 +2,54 @@ import { memo, useContext, useMemo, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
 import { CopyButton, DriverBadge, ErrorBoundary, Icon, StatusPill, type DriverDescriptor } from "../../ui";
-import { dayTime, elapsed } from "../../lib/format";
+import { dayTime } from "../../lib/format";
 import { Markdown } from "./Markdown";
 import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
 import { parsePathRefs } from "../media/pathRefs";
 import { FileRefs, toolFileRefs } from "../media/refs";
-import type { SubagentInfo } from "../../bridge/wire";
+import type { ContentPart, SubagentInfo } from "../../bridge/wire";
 import { Link, sessionPath } from "../../router";
 import { useAppState } from "../../state";
+import { MAIN, type TranscriptScope } from "../../state/scope";
 import { Elapsed, StopTask } from "./SessionWork";
 import { taskState } from "./tasks";
 import { TranscriptCtx, type TranscriptScopeInfo } from "./transcriptContext";
+import { MessageMenu } from "./MessageMenu";
+import { diffPartsOf, turnWords, type DiffPart } from "./itemText";
 import { useOpenRow } from "./expansion";
-import { deliveryNote, resultText, toolArg, type Item, type ThinkingItem, type ToolItem, type TurnItem } from "./transcript";
+import { deliveryNote, resultText, toolArg, type Item, type Part, type ThinkingItem, type ToolItem, type TurnItem } from "./transcript";
 import type { RowItem, ToolRunItem } from "./toolRuns";
 
 const DIFF_CAP = 2000;
 
-/** Old and new text of an edit as `-` / `+` rows, each side coloured by the file's language. */
-function EditDiff({ oldText, newText, file }: { oldText: string; newText: string; file: string }) {
+/**
+ * Old and new text of an edit as `-` / `+` rows, each side coloured by the file's language. No old text (`null`) means the file was
+ * created: every line is an addition.
+ */
+function EditDiff({ oldText, newText, file }: { oldText: string | null; newText: string; file: string }) {
   const lang = languageFromName(file);
-  const o = useHighlighted(oldText, lang);
+  const o = useHighlighted(oldText ?? "", lang);
   const n = useHighlighted(newText, lang);
   return (
     <div className="diff" data-testid="tool-diff">
-      {o.lines.slice(0, DIFF_CAP).map((l, i) => <div key={`d${i}`} className="ln d"><span /><span /><span>-</span><span><Tokens line={l} /></span></div>)}
+      {oldText ? o.lines.slice(0, DIFF_CAP).map((l, i) => <div key={`d${i}`} className="ln d"><span /><span /><span>-</span><span><Tokens line={l} /></span></div>) : null}
       {n.lines.slice(0, DIFF_CAP).map((l, i) => <div key={`a${i}`} className="ln a"><span /><span /><span>+</span><span><Tokens line={l} /></span></div>)}
     </div>
+  );
+}
+
+/** The file changes a tool reported, as `-` / `+` blocks: a hunk when the driver gave one, else the old and new text. */
+function DiffParts({ parts }: { parts: DiffPart[] }) {
+  return (
+    <>
+      {parts.map((p, i) => (
+        <div key={i} className="diff-part" data-testid="tool-diff-part">
+          <div className="hunk" data-testid="diff-path">{p.path}</div>
+          {p.hunk ? <DiffText text={p.hunk} /> : <EditDiff oldText={p.old_text ?? null} newText={p.new_text} file={p.path} />}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -53,20 +73,21 @@ function DiffText({ text }: { text: string }) {
   );
 }
 
+/** The body of an opened tool call: its command or the file it wrote, the file changes it reported, then its output. */
 function ToolBody({ item }: { item: ToolItem }) {
-  const i = item.input as { old_string?: string; new_string?: string; file_path?: string; path?: string; content?: string; command?: string } | undefined;
+  const i = item.input as { file_path?: string; path?: string; content?: string; command?: string } | undefined;
   const file = i?.file_path ?? i?.path ?? "";
-  if (typeof i?.old_string === "string" && typeof i.new_string === "string") return <EditDiff oldText={i.old_string} newText={i.new_string} file={file} />;
+  const diffs = diffPartsOf(item.parts);
   const text = resultText(item.result);
-  // A file a tool writes is shown by its extension; a shell command as shell.
-  const written = typeof i?.content === "string" && file ? <Code text={i.content} name={file} lineNumbers className="tool-code" testId="tool-write" copyable /> : null;
+  // A file a tool writes is shown by its extension; a shell command as shell. A change the driver reported as a diff is shown as that diff.
+  const written = !diffs.length && typeof i?.content === "string" && file ? <Code text={i.content} name={file} lineNumbers className="tool-code" testId="tool-write" copyable /> : null;
   const command = typeof i?.command === "string" ? <Code text={i.command} lang="bash" className="tool-code" testId="tool-command" copyable /> : null;
   let result: ReactNode;
-  if (!text) result = <div className="tool-b">{item.done ? (item.parts.length ? "" : "(no output)") : "Running…"}</div>;
+  if (!text) result = diffs.length ? null : <div className="tool-b">{item.done ? (item.parts.length ? "" : "(no output)") : "Running…"}</div>;
   else if (looksLikeDiff(text)) result = <DiffText text={text} />;
   else if (/^\s*[[{]/.test(text) && text.length < 200_000 && isJson(text)) result = <Code text={text} lang="json" className="tool-code" testId="tool-json" copyable />;
   else result = <div className="tool-b">{text}</div>;
-  return <>{command}{written}{result}</>;
+  return <>{command}{written}{diffs.length ? <DiffParts parts={diffs} /> : null}{result}</>;
 }
 
 const isJson = (t: string) => {
@@ -80,10 +101,10 @@ const isJson = (t: string) => {
 
 /** What a tool call shows without being opened: the images and files it produced, and the files it wrote. */
 function ToolOutputs({ item }: { item: ToolItem }) {
-  const files = useMemo(() => (item.done && item.ok !== false ? toolFileRefs(item.name, item.input) : []), [item.done, item.ok, item.name, item.input]);
+  const files = useMemo(() => (item.done && item.ok !== false ? toolFileRefs(item.name, item.input, item.parts) : []), [item.done, item.ok, item.name, item.input, item.parts]);
   return (
     <>
-      <PartsView parts={item.parts} />
+      <PartsView parts={withoutDiffs(item.parts)} />
       {files.length ? <FileRefs paths={files} label="Files this tool wrote" /> : null}
     </>
   );
@@ -199,14 +220,15 @@ function Thinking({ item }: { item: ThinkingItem }) {
 }
 
 /**
- * The end of a turn, in one muted line. Only what the turn reported is said: a turn whose start was not seen has no duration,
- * and a turn the user stopped says so instead of "Done".
+ * The end of a turn, in one muted line. Only what the turn reported is said: a turn whose start was not seen has no duration, a turn
+ * the user stopped says so instead of "Done", and tokens and cost appear only when the driver reported them for this turn.
  */
 function TurnFooter({ item }: { item: TurnItem }) {
-  const took = item.duration === undefined ? "" : elapsed(item.duration);
-  const words = item.interrupted ? (took ? `Interrupted after ${took}` : "Interrupted") : took ? `Done in ${took}` : "Done";
-  return <div className="turn-end faint fs12" data-testid="turn-footer" data-interrupted={item.interrupted ? "" : undefined}>{words}</div>;
+  return <div className="turn-end faint fs12" data-testid="turn-footer" data-interrupted={item.interrupted ? "" : undefined}>{turnWords(item)}</div>;
 }
+
+/** The parts a message or tool call shows as files and media; a diff is drawn by the tool body instead. */
+const withoutDiffs = (parts: ContentPart[]) => parts.filter((p) => p.type !== "diff");
 
 /** Paths in assistant prose that exist in the session's folder, as clickable chips. */
 function MentionedFiles({ text }: { text: string }) {
@@ -256,9 +278,9 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
       );
     case "media":
       return item.role === "user" ? (
-        <div className="msg-user"><PartsView parts={item.parts} /></div>
+        <div className="msg-user"><PartsView parts={withoutDiffs(item.parts)} /></div>
       ) : (
-        <div className="msg-ai"><PartsView parts={item.parts} /></div>
+        <div className="msg-ai"><PartsView parts={withoutDiffs(item.parts)} /></div>
       );
     case "thinking":
       return <Thinking item={item} />;
@@ -278,13 +300,17 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
 });
 
 /**
- * One transcript row. A row that cannot be drawn says so in its place and offers to try again; the
- * rest of the transcript is unaffected. It is drawn again by itself when its item changes.
+ * One transcript row, with its ⋯ menu. A row that cannot be drawn says so in its place and offers to try again; the rest of the
+ * transcript is unaffected. It is drawn again by itself when its item changes. `part` and `scope` say which list and which
+ * transcript the row belongs to (the raw events behind it are read from there).
  */
-export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { item: RowItem; driver?: DriverDescriptor }) {
+export const TranscriptItem = memo(function TranscriptItem({ item, driver, part = "live", scope = MAIN }: { item: RowItem; driver?: DriverDescriptor; part?: Part; scope?: TranscriptScope }) {
   return (
-    <ErrorBoundary variant="item" name="transcript_entry" what="this entry" resetKey={item}>
-      <TranscriptItemView item={item} driver={driver} />
-    </ErrorBoundary>
+    <div className="row-wrap">
+      <ErrorBoundary variant="item" name="transcript_entry" what="this entry" resetKey={item}>
+        <TranscriptItemView item={item} driver={driver} />
+      </ErrorBoundary>
+      <MessageMenu row={item} part={part} scope={scope} />
+    </div>
   );
 });

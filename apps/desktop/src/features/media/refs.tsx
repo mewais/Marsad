@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Api } from "../../bridge/api";
-import type { FileStat, HostId, SessionId } from "../../bridge/wire";
+import type { ContentPart, FileStat, HostId, SessionId } from "../../bridge/wire";
 import { useApi } from "../../state";
 import { useMediaScope } from "./Parts";
 import { parsePathRefs } from "./pathRefs";
@@ -11,16 +11,21 @@ const FILE_KEYS = ["file_path", "filePath", "notebook_path", "path"];
 /** Tools whose input path is a file they create or change (claude, ACP kinds, codex). */
 const WRITES = /^(write|edit|multiedit|notebookedit|create|apply_patch|str_replace_based_edit_tool)$/i;
 
-/** Files a tool call writes or edits, from its input (codex `apply_patch` lists changes). */
-export function toolFileRefs(name: string, input: unknown): string[] {
-  if (!input || typeof input !== "object") return [];
-  const o = input as Record<string, unknown>;
+/**
+ * Files a tool call writes or edits: the paths of its diff parts (the driver reports each change it made), then, from its input,
+ * the file of a write-like tool (codex `apply_patch` lists changes).
+ */
+export function toolFileRefs(name: string, input: unknown, parts: readonly ContentPart[] = []): string[] {
   const out: string[] = [];
-  if (WRITES.test(name.trim())) {
-    for (const k of FILE_KEYS) if (typeof o[k] === "string" && o[k]) out.push(o[k] as string);
-  }
-  if (Array.isArray(input)) {
-    for (const c of input) if (c && typeof c === "object" && typeof (c as { path?: unknown }).path === "string") out.push((c as { path: string }).path);
+  for (const p of parts) if (p.type === "diff") out.push(p.path);
+  if (input && typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    if (WRITES.test(name.trim())) {
+      for (const k of FILE_KEYS) if (typeof o[k] === "string" && o[k]) out.push(o[k] as string);
+    }
+    if (Array.isArray(input)) {
+      for (const c of input) if (c && typeof c === "object" && typeof (c as { path?: unknown }).path === "string") out.push((c as { path: string }).path);
+    }
   }
   return [...new Set(out)];
 }

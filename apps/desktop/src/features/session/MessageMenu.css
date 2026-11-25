@@ -1,0 +1,8 @@
+/* The row menu sits at the row's top-right corner, outside the text column, and is shown on hover or focus within the row. */
+.row-wrap{position:relative}
+.row-wrap>.relwrap{position:absolute;top:0;right:-26px;width:24px;height:24px;opacity:0;transition:opacity .12s}
+.row-wrap:hover>.relwrap,.row-wrap:focus-within>.relwrap{opacity:1}
+.row-wrap>.relwrap:has(.row-menu-btn[aria-expanded="true"]){opacity:1}
+@media (hover:none){.row-wrap>.relwrap{opacity:1}}
+.row-menu-btn{width:24px;height:24px}
+.raw-json{margin:0;max-height:60vh;overflow:auto;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r2);background:var(--surface);font-family:var(--mono, ui-monospace, monospace);font-size:12px;line-height:1.45;white-space:pre;tab-size:2}

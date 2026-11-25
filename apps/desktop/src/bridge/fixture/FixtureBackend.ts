@@ -1,5 +1,5 @@
 import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "../backend";
-import type { ExportSaved } from "../api";
+import { EXEC_CANCEL, EXEC_START, SESSION_LOCAL_SHELL, SESSIONS_FORK, type ExecStartRequest, type ExportSaved, type ForkSession, type LocalShellRequest } from "../api";
 import type {
   AttachmentPut,
   FileReadRequest,
@@ -19,6 +19,7 @@ import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
 import { FixturePtys } from "./pty";
+import { FixtureExecs } from "./exec";
 import { FixtureHostEnvs } from "./hostenv";
 import { err, SessionSim, snapshotOf, tailPage, type Entry } from "./runtime";
 import { FixtureFiles, MEDIA_SPEC } from "./media";
@@ -88,6 +89,8 @@ export class FixtureBackend implements Backend {
   readonly envs: FixtureHostEnvs;
   /** The hosts' terminals (`pty.*`): one per session, scripted shells. */
   readonly ptys = new FixturePtys({ deliver: (fn) => this.deliver(fn) });
+  /** The hosts' `host.exec` executions: a test drives their output and exit (`execs.output`, `execs.exit`). */
+  readonly execs: FixtureExecs;
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
   private navigators = new Set<(t: { host: HostId; session?: string }) => void>();
   /** The app's link to its local daemon (what the desktop shell reports); starts connected. */
@@ -116,6 +119,7 @@ export class FixtureBackend implements Backend {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
     const now = this.opts.now();
     this.envs = new FixtureHostEnvs(this.opts.now);
+    this.execs = new FixtureExecs({ live: this.opts.live, later: (ms, fn) => this.later(ms * this.opts.speed, fn) });
     this.exports = new FixtureExports({
       now: this.opts.now,
       hosts: () => [...this.hosts.values()].map((h) => ({ id: h.def.entry.id, up: this.isUp(h), link: h.def.link })),
@@ -310,6 +314,12 @@ export class FixtureBackend implements Backend {
     }
     const host = this.hosts.get(opts.host ?? "x1");
     if (!host) return () => undefined;
+    const exec = /^host\.exec:(.+)$/.exec(topic);
+    if (exec) {
+      // Not while the host is unreachable: the subscription waits for its link.
+      if (!this.isUp(host)) return () => undefined;
+      return this.execs.attach(host.def.entry.id, exec[1], Number(opts.from ?? 0), (e) => onEvent(e), ended);
+    }
     if (topic === T.DRIVERS_INVENTORY) {
       const id = host.def.entry.id;
       const subs = this.invSubs.get(id) ?? new Set();
@@ -454,6 +464,8 @@ export class FixtureBackend implements Backend {
       case M.SESSIONS_CONTINUE:
         this.sim.continueSession(this.entry(host, p as SessionRef));
         return {};
+      case SESSIONS_FORK:
+        return this.hub.fork(hostId, p as ForkSession);
       case M.SESSIONS_RENAME: {
         const r = p as RenameSession;
         const e = this.entry(host, r);
@@ -525,6 +537,17 @@ export class FixtureBackend implements Backend {
       case M.PTY_CLOSE:
         this.ptys.close(hostId, (p as PtyRef).id);
         return {};
+      case EXEC_START: {
+        const r = p as ExecStartRequest;
+        return this.execs.start(hostId, r.cwd, r.line);
+      }
+      case EXEC_CANCEL:
+        this.execs.cancel((p as { exec_id: string }).exec_id);
+        return {};
+      case SESSION_LOCAL_SHELL: {
+        const r = p as LocalShellRequest;
+        return this.sim.localShell(this.entry(host, { id: r.session }), r);
+      }
       default:
         throw err("method_not_found", `Fixture does not implement ${method}`);
     }

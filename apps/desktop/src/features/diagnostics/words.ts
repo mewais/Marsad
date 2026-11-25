@@ -252,7 +252,8 @@ export function trailWords(e: TrailEntry): string {
     case "agent.notice":
       return `The agent sent a notice — ${errorWords(e.error)}`;
     case "agent.compaction":
-      return say(`The conversation was compacted: ${e.pre_tokens} → ${e.post_tokens} tokens in ${duration(e.duration_ms)}`, e.trigger && ` (${e.trigger})`);
+      // The CLI may report only some figures: say only those (never a made-up zero).
+      return say("The conversation was compacted", e.pre_tokens != null && e.post_tokens != null && `: ${e.pre_tokens} → ${e.post_tokens} tokens`, e.duration_ms != null && ` in ${duration(e.duration_ms)}`, e.trigger && ` (${e.trigger})`);
     case "agent.rate_limited":
       return say("The provider reports a rate limit", e.status && `: ${e.status}`, e.rate_limit_type && ` (${e.rate_limit_type})`, e.is_using_overage && ", using overage", e.resets_at > 0 && `, resets at ${new Date(e.resets_at * 1000).toISOString().slice(11, 19)} UTC`);
     case "agent.unknown":

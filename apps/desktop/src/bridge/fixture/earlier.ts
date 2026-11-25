@@ -72,7 +72,8 @@ export function historyTail(end: number): HistoryItem[] {
   item({ type: "compaction", info: { trigger: "auto", pre_tokens: 168_400, post_tokens: 41_200, cumulative_dropped_tokens: 127_200, duration_ms: 9_400 } }, 2000);
   item({ type: "assistant_delta", text: "The PDF rounds a second time. I'll round **once**, at the end.", message_id: "t2" }, 2500);
   item({ type: "tool_call_started", name: "Edit", call_id: "ht3", input: { file_path: "packages/invoices/src/pdf.ts", old_string: "Math.round(total * 100) / 100", new_string: "total" } as JsonValue, is_subagent: false }, 1500);
-  item({ type: "tool_call_finished", name: "Edit", call_id: "ht3", ok: true, result: "Edited packages/invoices/src/pdf.ts" }, 500);
+  item({ type: "tool_call_finished", name: "Edit", call_id: "ht3", ok: true, result: "Edited packages/invoices/src/pdf.ts",
+    parts: [{ type: "diff", path: "packages/invoices/src/pdf.ts", old_text: "Math.round(total * 100) / 100", new_text: "total" }] }, 500);
   item({ type: "assistant_delta", text: "Fixed: totals are rounded once, in `total()`.", message_id: "t3" }, 2000);
   return out;
 }

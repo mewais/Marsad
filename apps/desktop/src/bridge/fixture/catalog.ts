@@ -4,7 +4,7 @@ import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, Host
 
 const caps = (over: Partial<DriverCapabilities> = {}): DriverCapabilities => ({
   interrupt: true, set_model: true, set_mode: true, slash_commands: true, permission_gates: true, questions: true, plan_gate: true,
-  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, earlier_history: "wire", ...over,
+  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, earlier_history: "wire", fork: false, compact: false, run_shell: false, ...over,
 });
 
 /** What each real driver reports (Wasit descriptors). */
@@ -36,7 +36,7 @@ const mcp = (name: string, scope: string, path: string, command: string, args: s
 
 export const DRIVERS: DriverDef[] = [
   {
-    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true, earlier_history: "storage" }), prompt_input: promptInput("path_reference"), version: "2.1.4",
+    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true, earlier_history: "storage", fork: true, compact: true }), prompt_input: promptInput("path_reference"), version: "2.1.4",
     models: [m("claude-sonnet-4.5", true, "claude-sonnet-4.5", "Balanced"), m("claude-opus-4.1", false, "claude-opus-4.1", "Most capable"), m("claude-haiku-4.5", false, "claude-haiku-4.5", "Fast")],
     modes: [
       { id: "default", label: "Default", description: "Ask before edits and commands" },
@@ -65,7 +65,7 @@ export const DRIVERS: DriverDef[] = [
     resumeArgv: (id) => ["claude", "--resume", id],
   },
   {
-    id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }), prompt_input: promptInput("path_reference", false, 20 * 1024 * 1024), version: "0.58.0",
+    id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true, run_shell: true, fork: true, compact: true }), prompt_input: promptInput("path_reference", false, 20 * 1024 * 1024), version: "0.58.0",
     models: [m("gpt-5-codex", true), m("gpt-5-codex-mini"), m("gpt-5"), m("o4-mini")],
     modes: [
       { id: "read-only", label: "Read only", description: "" },
@@ -75,6 +75,7 @@ export const DRIVERS: DriverDef[] = [
     slash: [
       { name: "review", description: "Review the working tree", argument_hint: "" },
       { name: "status", description: "Show session configuration", argument_hint: "" },
+      { name: "compact", description: "Summarize history to free context", argument_hint: "" },
     ],
     config: [
       mcp("github", "global", "~/.codex/config.toml", "github-mcp-server"),

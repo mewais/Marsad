@@ -207,7 +207,9 @@ function projectAgent(events: readonly SessionEvent[], i: number): Entry[] {
     case "notice":
       return [{ ev: "agent.notice", error: foreignError("notice", a.message) }];
     case "compaction":
-      return [nonNull({ ev: "agent.compaction" as const, pre_tokens: a.info.pre_tokens, post_tokens: a.info.post_tokens, duration_ms: a.info.duration_ms, trigger: a.info.trigger })];
+      // The trail's generated type still requires the three figures (B0 regenerates it with them optional, as `CompactionInfo` has them):
+      // the entry carries only what the CLI reported, never a made-up 0.
+      return [nonNull({ ev: "agent.compaction" as const, pre_tokens: a.info.pre_tokens, post_tokens: a.info.post_tokens, duration_ms: a.info.duration_ms, trigger: a.info.trigger }) as TrailEntry];
     case "rate_limit_notice":
       return [nonNull({ ev: "agent.rate_limited" as const, resets_at: a.info.resets_at, is_using_overage: a.info.is_using_overage, status: a.info.status, rate_limit_type: a.info.rate_limit_type })];
     case "unknown":

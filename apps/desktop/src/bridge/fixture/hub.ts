@@ -1,5 +1,6 @@
+import type { ForkSession } from "../api";
 import type {
-  AuthAnswer, AuthCancel, EffectiveRequest, HostDraft, HostEntry, HostRef, LaunchReply, LaunchRequest, LayerScope, NotificationPrefs, RecentProject, SeenMark, SessionSnapshot,
+  AuthAnswer, AuthCancel, CreateSessionReply, EffectiveRequest, HostDraft, HostEntry, HostRef, LaunchReply, LaunchRequest, LayerScope, NotificationPrefs, RecentProject, SeenMark, SessionSnapshot,
   SettingSet, StoredLayer, WorkstreamsEvent,
 } from "../wire";
 import { methods as M } from "../wire";
@@ -195,6 +196,31 @@ export class FixtureHub {
       message: `sessions.create on ${host}: ${message}`,
       cause: { code: "nothing_to_continue", message, data: { error: "nothing_to_continue", message } },
     });
+  }
+
+  /**
+   * `sessions.fork` on a host: a new session that copies the parent's conversation, as the CLI's own fork does; the parent is
+   * not changed. Refused like the runtime refuses: the parent must be a fork-capable driver, idle, with a completed turn.
+   */
+  fork(host: string, r: ForkSession): CreateSessionReply {
+    const c = this.core;
+    const parent = c.session(host, r.parent);
+    if (!parent) throw err("session_not_found", `No such session: ${r.parent}`);
+    if (!parent.capabilities.fork) throw err("unsupported", "this agent cannot fork a session", { error: "unsupported" });
+    if (parent.phase.state !== "idle" || parent.turns_completed < 1) throw err("invalid_state", "a session can be forked once it is idle with a completed turn", { error: "invalid_state", reason: `the session is ${parent.phase.state}, with ${parent.turns_completed} completed turns` });
+    const id = `fxfk${String(this.n++).padStart(6, "0")}`;
+    const now = c.now();
+    const fresh: Omit<SessionSnapshot, keyof ConversationFacts> = {
+      id, driver: parent.driver, cwd: parent.cwd, labels: parent.labels, created_at_ms: now, command: parent.command, capabilities: parent.capabilities, prompt_input: parent.prompt_input,
+      phase: { state: "starting" }, generation: 1, pid: 5000 + this.n, native_session_id: null, title: parent.title, display_name: r.name?.trim() || null, cli_version: parent.cli_version,
+      model: parent.model, mode: parent.mode, available_models: parent.available_models, available_modes: parent.available_modes, slash_commands: parent.slash_commands,
+      pending_gates: [], turn: null, last_turn: null, turns_completed: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0 },
+      live_usage: null, context_pct: null, subagents: [], tasks: [], background_running: 0, plan: [], last_activity_ms: now, exit: null, stderr_tail: [], cursor: 0, loaded: true,
+      earlier: NO_EARLIER, forked_from: { session: parent.id, native_session_id: parent.native_session_id ?? "" },
+    };
+    const snap: SessionSnapshot = { ...fresh, ...conversationFacts(fresh) };
+    c.createSession(host, snap, null);
+    return { id, cwd: parent.cwd ?? null, unsupported: [] };
   }
 
   launch(r: LaunchRequest): LaunchReply {

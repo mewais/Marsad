@@ -1,6 +1,6 @@
-import type { Api } from "../bridge/api";
+import type { Api, LocalShellRecord } from "../bridge/api";
 import { errorMessage } from "../bridge/api";
-import type { Attachment, Command, GateDecision, HostId, LaunchReply, LaunchRequest, QuestionAnswer, SessionKey, UiEvent } from "../bridge/wire";
+import type { Attachment, Command, CreateSessionReply, GateDecision, HostId, LaunchReply, LaunchRequest, QuestionAnswer, SessionKey, UiEvent } from "../bridge/wire";
 import { splitKey } from "../bridge/wire";
 import { toast } from "../ui/toast";
 import { seenState } from "./controller";
@@ -34,6 +34,12 @@ export interface Actions {
    * `continue_failed` (reason attached) when it cannot, and nothing was sent.
    */
   sendPrompt(key: SessionKey, text: string, files?: PromptFiles, opts?: { onError?: (e: unknown) => boolean | void }): Promise<boolean>;
+  /**
+   * Journal a command the user ran on the session's host, so it shows in the session's conversation (`session.local_shell`;
+   * pending under `localShellPendingKey`). Resolves true when the host took it. A refusal goes to `onError` when given (the
+   * caller shows it where the user is looking); without it, a toast.
+   */
+  recordLocalShell(key: SessionKey, record: LocalShellRecord, opts?: { onError?: (e: unknown) => boolean | void }): Promise<boolean>;
   /** Launch a session (hub): pending flag under `pk`, toast on failure. Resolves to its reply, or undefined when it did not start. */
   launch(pk: string, request: LaunchRequest, opts?: { onError?: (e: unknown) => boolean | void }): Promise<LaunchReply | undefined>;
   /** Begin a user action that takes several calls (a launch that uploads files): its trace id and `ui.*` events. */
@@ -44,6 +50,13 @@ export interface Actions {
   interrupt(key: SessionKey): Promise<boolean>;
   /** Stop one background task or subagent the agent runs, by the agent's task id (the `stop_task` command). */
   stopTask(key: SessionKey, taskId: string): Promise<boolean>;
+  /** Compact the agent's conversation context now (the `compact` command). Resolves true when the host accepted it. */
+  compact(key: SessionKey): Promise<boolean>;
+  /**
+   * Fork the session on its host (`sessions.fork`): a new session that copies its conversation. Resolves to the new
+   * session's reply (its id is where to navigate), or undefined when it was not made.
+   */
+  fork(key: SessionKey, name?: string | null): Promise<CreateSessionReply | undefined>;
   /** Shut the agent's process down and keep the session (`sessions.stop`). */
   endSession(key: SessionKey): Promise<boolean>;
   /** Start a new process for an ended session, with its earlier transcript (`sessions.continue`). */
@@ -84,10 +97,13 @@ export function isGateWithdrawn(e: unknown): boolean {
 export const interruptPendingKey = (key: SessionKey) => `cmd:${key}:interrupt`;
 export const stopTaskPendingKey = (key: SessionKey, taskId: string) => `cmd:${key}:stop_task:${taskId}`;
 export const endPendingKey = (key: SessionKey) => `end:${key}`;
+export const compactPendingKey = (key: SessionKey) => `cmd:${key}:compact`;
+export const forkPendingKey = (key: SessionKey) => `fork:${key}`;
 export const continuePendingKey = (key: SessionKey) => `continue:${key}`;
 export const reconnectPendingKey = (host: HostId) => `reconnect:${host}`;
 export const signOutPendingKey = (host: HostId) => `signout:${host}`;
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
+export const localShellPendingKey = (key: SessionKey) => `shell:${key}:record`;
 
 /**
  * Every action is fire, pending state, result: the UI is never blocked on the backend.
@@ -172,6 +188,10 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
         }, { host, onError: opts?.onError }),
       );
     },
+    recordLocalShell: (key, record, opts) => {
+      const { host, id } = splitKey(key);
+      return ok(run(localShellPendingKey(key), "Could not save the command to the conversation", () => api.localShell(host, { session: id, ...record }), { host, onError: opts?.onError }));
+    },
     launch: (pk, request, opts) =>
       run(pk, "Could not start the session", () => {
         const t = trace();
@@ -182,6 +202,11 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
     record: diag.log,
     interrupt: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
     stopTask: (key, taskId) => command(key, { command: "stop_task", task_id: taskId }, { pendingKey: stopTaskPendingKey(key, taskId), failTitle: "Could not stop the task" }),
+    compact: (key) => command(key, { command: "compact" }, { pendingKey: compactPendingKey(key), failTitle: "Could not compact the session" }),
+    fork: (key, name) => {
+      const { host, id } = splitKey(key);
+      return run(forkPendingKey(key), "Could not fork the session", () => api.forkSession(host, { parent: id, name: name ?? null }), { host });
+    },
     endSession: (key) => {
       const { host, id } = splitKey(key);
       return ok(run(endPendingKey(key), "Could not end the session", () => {

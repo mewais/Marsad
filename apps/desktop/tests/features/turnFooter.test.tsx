@@ -29,7 +29,7 @@ describe("turn footer", () => {
     expect(footers()).toEqual(["Done in 42s"]);
     expect(screen.getByTestId("turn-footer")).not.toHaveAttribute("data-interrupted");
     // The footer is the last thing in the turn.
-    expect(screen.getByTestId("turn-footer").previousElementSibling).toHaveTextContent("All done.");
+    expect(screen.getByTestId("turn-footer").closest(".row-wrap")?.previousElementSibling).toHaveTextContent("All done.");
   });
 
   it("says an interrupted turn was interrupted, and after how long", () => {
@@ -64,5 +64,42 @@ describe("live messages show their time", () => {
     const times = screen.getAllByTestId("msg-time").map((t) => t.textContent);
     expect(times[0]).toBe(dayTime(at));
     expect(times[1]).toContain(dayTime(at + 60_000));
+  });
+});
+
+describe("turn footer: what the turn used", () => {
+  const usage = { input_tokens: 1200, output_tokens: 380, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.03 };
+  const turn = (extra: Record<string, unknown>, start = true) => [
+    ...(start ? [agent(1_000, { type: "turn_started", trigger: "input", input: 1 })] : []),
+    agent(43_100, { type: "turn_completed", was_interrupted: false, num_turns: 1, usage: {}, ...extra }),
+  ];
+  const footerOf = (events: SessionEvent[]) => {
+    render(<>{rowsOf(events).map((r) => <TranscriptItem key={r.key} item={r} />)}</>);
+    return screen.getByTestId("turn-footer").textContent;
+  };
+
+  it("says the tokens and the cost the turn alone used, after its duration", () => {
+    expect(footerOf(turn({ turn_usage: usage }))).toBe("Done in 42s · 1.2k in / 380 out · $0.03");
+  });
+
+  it("hides tokens and cost when the turn reported no usage of its own", () => {
+    expect(footerOf(turn({ turn_usage: null }))).toBe("Done in 42s");
+  });
+
+  it("hides the cost when the driver reports none (zero), keeps the tokens", () => {
+    expect(footerOf(turn({ turn_usage: { ...usage, cost_usd: 0 } }))).toBe("Done in 42s · 1.2k in / 380 out");
+  });
+
+  it("a cost too small to show reads as under a cent", () => {
+    expect(footerOf(turn({ turn_usage: { ...usage, cost_usd: 0.004 } }))).toBe("Done in 42s · 1.2k in / 380 out · <$0.01");
+  });
+
+  it("an interrupted turn with usage says both", () => {
+    const events = [agent(1_000, { type: "turn_started", trigger: "input", input: 2 }), agent(13_000, { type: "turn_completed", was_interrupted: true, num_turns: 0, usage: {}, turn_usage: { ...usage, input_tokens: 980, output_tokens: 40, cost_usd: 0 } })];
+    expect(footerOf(events)).toBe("Interrupted after 12s · 980 in / 40 out");
+  });
+
+  it("usage without a start seen still shows, with no duration", () => {
+    expect(footerOf(turn({ turn_usage: usage }, false))).toBe("Done · 1.2k in / 380 out · $0.03");
   });
 });

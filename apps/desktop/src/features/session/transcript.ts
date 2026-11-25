@@ -1,4 +1,4 @@
-import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, GateRequest, InputDropReason, InputId, RateLimitInfo, SessionEvent } from "../../bridge/wire";
+import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, GateRequest, InputDropReason, InputId, LocalShellOrigin, RateLimitInfo, SessionEvent, Usage } from "../../bridge/wire";
 import { endedSentence } from "../../lib/endWords";
 import { clockTime, compactNumber } from "../../lib/format";
 import { gateWhat } from "../../lib/gatewords";
@@ -33,10 +33,16 @@ export type ToolItem = { kind: "tool"; key: string; callId: string; name: string
 /** `warn`: the agent or its provider says something to watch (a rate limit), not a failure. */
 export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "info" | "warn" | "err"; span: Span };
 /**
- * The end of one turn: how long it ran (from the turn's start to its end, when both were seen) and whether the user interrupted it.
- * Nothing else about a turn (its tokens, its cost) is in the item yet: the footer shows only what is here.
+ * The end of one turn: how long it ran (from the turn's start to its end, when both were seen), whether the user interrupted it, and
+ * what the turn alone used (`usage`, when the driver could tell: see `turn_usage`). The footer shows only what is here.
  */
-export type TurnItem = { kind: "turn"; key: string; duration?: number; interrupted: boolean; span: Span };
+export type TurnItem = { kind: "turn"; key: string; duration?: number; interrupted: boolean; usage?: Usage; span: Span };
+
+/**
+ * A shell command that ran on the session's side and printed `output`: the host ran it for the user (`!`, origin `host`), or the
+ * agent ran it in its own shell (origin `driver`). `exitCode` is absent when the command was stopped or no code was reported.
+ */
+export type ShellItem = { kind: "shell"; key: string; command: string; cwd?: string; exitCode?: number; output: string; outputTruncated: boolean; origin: LocalShellOrigin; at?: number; span: Span };
 
 /**
  * One folded transcript entry. Items are immutable: a change replaces the item with a new object,
@@ -50,7 +56,8 @@ export type Item =
   | ThinkingItem
   | ToolItem
   | NoticeItem
-  | TurnItem;
+  | TurnItem
+  | ShellItem;
 
 /** An item before the fold gives it its span: what the fold's helpers take. */
 type Body = Item extends infer I ? (I extends Item ? Omit<I, "span"> : never) : never;
@@ -291,7 +298,7 @@ function apply(st: State, e: SessionEvent) {
       // The turn's end is its own row, after anything the turn said; its duration needs the start that was seen.
       const duration = st.turnStart === undefined ? undefined : e.t - st.turnStart;
       st.turnStart = undefined;
-      push(st, { kind: "turn", key, duration, interrupted: a.was_interrupted });
+      push(st, { kind: "turn", key, duration, interrupted: a.was_interrupted, usage: a.turn_usage ?? undefined });
       return;
     }
     case "task_started": {
@@ -328,6 +335,11 @@ function apply(st: State, e: SessionEvent) {
     case "rate_limit_notice":
       notice(st, key, rateLimitWords(a.info), "warn");
       return;
+    case "local_shell":
+      // Live only: a command the session ran is in the conversation's events, not in its earlier history.
+      push(st, { kind: "shell", key, command: a.command, cwd: a.cwd ?? undefined, exitCode: a.exit_code ?? undefined, output: a.output, outputTruncated: !!a.output_truncated, origin: a.origin, at: when });
+      st.lastMsg = undefined;
+      return;
     case "command_rejected":
       notice(st, key, `${a.command} was rejected: ${a.message}`, "err");
       return;
@@ -337,9 +349,19 @@ function apply(st: State, e: SessionEvent) {
   }
 }
 
-/** The agent compacted its context: how much it dropped, and when (when known). */
+/**
+ * The agent compacted its context: when (when known), what triggered it, and what the CLI reported of it. Every part of
+ * `CompactionInfo` is optional (a CLI reports only what it knows), so a part that is absent is left out, never printed as 0 or empty.
+ */
 export function compactionWords(c: CompactionInfo, at: number | undefined): string {
-  return `History compacted${at === undefined ? "" : ` at ${clockTime(at)}`} (${c.trigger}): ${compactNumber(c.pre_tokens)} → ${compactNumber(c.post_tokens)} tokens in ${(c.duration_ms / 1000).toFixed(1)}s · ${compactNumber(c.cumulative_dropped_tokens)} dropped so far`;
+  const head = `History compacted${at === undefined ? "" : ` at ${clockTime(at)}`}${c.trigger ? ` (${c.trigger})` : ""}`;
+  const pre = c.pre_tokens;
+  const post = c.post_tokens;
+  const tokens = pre != null && post != null ? `${compactNumber(pre)} → ${compactNumber(post)} tokens` : pre != null ? `${compactNumber(pre)} tokens before` : post != null ? `${compactNumber(post)} tokens after` : "";
+  const took = c.duration_ms != null ? `in ${(c.duration_ms / 1000).toFixed(1)}s` : "";
+  const detail = [tokens, took].filter(Boolean).join(" ");
+  const dropped = c.cumulative_dropped_tokens != null ? ` · ${compactNumber(c.cumulative_dropped_tokens)} dropped so far` : "";
+  return `${head}${detail ? `: ${detail}` : ""}${dropped}`;
 }
 
 /** The provider's rate-limit status, and when it resets. */
