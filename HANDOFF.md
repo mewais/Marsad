@@ -12,7 +12,7 @@ Marsad's `Cargo.toml` names `branch = "session-flows"` for every Wasit and Wasl 
 (Wasl's manifests do the same for Wasit). The two Marsad `Cargo.lock` files pin the revisions of
 that branch (git sources), in the root lock and in the shell's `apps/desktop/src-tauri/Cargo.lock`
 (which also has `wasl-proto`: re-pin both crates' families in both locks); they are pinned to
-Wasit 9096981 / Wasl a5fb553. Local builds use the untracked,
+Wasit 3cdfd46 / Wasl a5fb553. Local builds use the untracked,
 git-ignored `.cargo/config.toml` path patches (they must list every Wasit crate Marsad uses,
 including the new `wasit-diag`), which rewrite the locks to path sources — never commit those.
 Re-pin after pushing Wasit or Wasl with: move `.cargo/config.toml` aside, `cargo update -p <crate>`
