@@ -302,6 +302,31 @@ pub const HUB_ROUTES: &[&str] = &[
     "diagnostics.",
 ];
 
+/// Requests a remote daemon may send the hub over the link the hub opened to it: the Wasl routes
+/// a remote node legitimately needs. A remote node has no spawn authority of its own, so it asks
+/// the hub's (`wasl.supervisor.*`, served by the hub itself); and its node-to-node deliveries go
+/// through the hub to other hosts (`wasl.node.*`). Traced in `wasl-node`: the uplink carries
+/// exactly these eight calls upward (the hub sends topology and the rest downward).
+const LINK_LOCAL_ONLY: &[&str] = &[
+    wasl_proto::methods::SUPERVISOR_SPAWN_PLAN,
+    wasl_proto::methods::SUPERVISOR_SPAWN_LAUNCH,
+    wasl_proto::methods::SUPERVISOR_DISMISS,
+    wasl_proto::methods::SUPERVISOR_SPAWNABLE,
+];
+const LINK_ROUTABLE: &[&str] = &[
+    wasl_proto::methods::NODE_DELIVER,
+    wasl_proto::methods::NODE_UPDATE,
+    wasl_proto::methods::NODE_CANCEL,
+    wasl_proto::methods::NODE_PEER_STATUS,
+];
+
+/// Whether a remote daemon's request may run on the hub (see `wasit_control::LinkGate`).
+/// `forwarded`: the request is addressed to another host. Host surfaces (`host.exec.*`, `pty.*`,
+/// `fs.*`, `daemon.*`, `sessions.*`, `git.*`, `store.*`, `hosts.*`, ...) are never allowed.
+pub fn remote_link_allows(method: &str, forwarded: bool) -> bool {
+    LINK_ROUTABLE.contains(&method) || (!forwarded && LINK_LOCAL_ONLY.contains(&method))
+}
+
 /// Error codes of [`MarsadError`].
 pub mod codes {
     pub const INVALID_REQUEST: &str = "invalid_params";

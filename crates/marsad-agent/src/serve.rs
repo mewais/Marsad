@@ -18,8 +18,8 @@ use marsad_store::Store;
 use tokio_util::sync::CancellationToken;
 use wasit_control::{
     connector, BindError, ClientOptions, ConnConfig, ControlClient, ControlServer, Endpoint, Hello,
-    Hub, HubConfig, InstanceLock, LockError, RoutingService, Service, ServiceMux, Supervised,
-    SupervisedOptions, Uplink,
+    Hub, HubConfig, InstanceLock, LinkGate, LockError, RoutingService, Service, ServiceMux,
+    Supervised, SupervisedOptions, Uplink,
 };
 use wasit_core::DriverId;
 use wasit_diag::{HomePath, Ident};
@@ -478,7 +478,13 @@ async fn start_hub(
     hcfg.supervise.connect_timeout = prompt_timeout * 3 + Duration::from_secs(120);
     let hub = Hub::new(hcfg, Arc::new(connector), Some(Arc::new(provisioner)));
     let routing: Arc<dyn Service> = Arc::new(RoutingService::new(hub.clone(), local));
-    hub.set_inbound_service(routing.clone());
+    // A remote daemon's link may call only the Wasl routes it needs (see `remote_link_allows`):
+    // the gate sits on the link slot only, so this host's own clients keep the full service.
+    hub.set_inbound_service(Arc::new(LinkGate::new(
+        HostId::new(host_id),
+        routing.clone(),
+        Arc::new(marsad_proto::remote_link_allows),
+    )));
     let local_id = HostId::new(host_id);
     fleet.feed_links(hub.clone());
     let local_entry = HostEntry {
