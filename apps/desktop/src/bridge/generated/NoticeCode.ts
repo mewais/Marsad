@@ -3,4 +3,4 @@
 /**
  * What a [`SessionEventKind::Notice`] is about.
  */
-export type NoticeCode = "stop_requested" | "handshake_deadline" | "signal_sent" | "previous_generation_unclosed" | "start_ignored" | "shim" | "unrecognised_note" | "other";
+export type NoticeCode = "stop_requested" | "handshake_deadline" | "signal_sent" | "previous_generation_unclosed" | "start_ignored" | "shim" | "unrecognised_note" | "answer_not_delivered" | "other";
