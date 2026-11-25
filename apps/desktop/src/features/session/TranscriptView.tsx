@@ -8,12 +8,12 @@ import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
 import { parsePathRefs } from "../media/pathRefs";
 import { FileRefs, toolFileRefs } from "../media/refs";
-import type { ContentPart, SubagentInfo } from "../../bridge/wire";
+import type { ContentPart, SubagentInfo, SubagentSupport } from "../../bridge/wire";
 import { Link, sessionPath } from "../../router";
 import { useAppState } from "../../state";
 import { MAIN, type TranscriptScope } from "../../state/scope";
-import { Elapsed, StopTask } from "./SessionWork";
-import { taskState } from "./tasks";
+import { StopTask, SubagentMeta } from "./SessionWork";
+import { NO_SUBAGENT_SUPPORT, subagentState } from "./tasks";
 import { TranscriptCtx, type TranscriptScopeInfo } from "./transcriptContext";
 import { MessageMenu } from "./MessageMenu";
 import { diffPartsOf, turnWords, type DiffPart } from "./itemText";
@@ -177,12 +177,13 @@ function Subagent({ item }: { item: ToolItem }) {
 
 function LiveSubagent({ item, scope }: { item: ToolItem; scope: TranscriptScopeInfo }) {
   const info = useAppState((s) => s.sessions[scope.key]?.subagents.find((x) => x.call_id === item.callId), sameInfo);
-  return <SubagentCard item={item} info={info} scope={scope} />;
+  const caps = useAppState((s) => s.sessions[scope.key]?.capabilities.subagents);
+  return <SubagentCard item={item} info={info} caps={caps} scope={scope} />;
 }
 
-function SubagentCard({ item, info, scope }: { item: ToolItem; info?: SubagentInfo; scope?: TranscriptScopeInfo }) {
+function SubagentCard({ item, info, caps, scope }: { item: ToolItem; info?: SubagentInfo; caps?: SubagentSupport; scope?: TranscriptScopeInfo }) {
   const i = (item.input ?? {}) as { description?: string; subagent_type?: string };
-  const st = info ? taskState(info) : undefined;
+  const st = info ? subagentState(info) : undefined;
   const label = i.description ?? toolArg(item.input);
   return (
     <div className="subag" data-testid="subagent" data-running={info?.running ? "" : undefined}>
@@ -191,8 +192,8 @@ function SubagentCard({ item, info, scope }: { item: ToolItem; info?: SubagentIn
         <b>Subagent · {info?.subagent_type ?? i.subagent_type ?? item.name}</b>
         <span className="muted">“{label}”</span>
         <span className="flex1" />
-        {st ? <StatusPill status={st.tone} label={st.word} /> : null}
-        {info ? <span className="faint" data-testid="subagent-meta">{info.tool_calls} tool call{info.tool_calls === 1 ? "" : "s"} · <Elapsed t={info} /></span> : null}
+        {st ? <span title={st.why}><StatusPill status={st.status} label={st.word} /></span> : null}
+        {info ? <span className="faint" data-testid="subagent-meta"><SubagentMeta s={info} caps={caps ?? NO_SUBAGENT_SUPPORT} /></span> : null}
         {scope && info?.running && info.task_id ? <StopTask sessionKey={scope.key} taskId={info.task_id} what={`subagent ${label}`} /> : null}
         {scope ? <Link className="btn sm ghost" to={sessionPath(scope.host, scope.id, undefined, item.callId)} data-testid="subagent-open"><Icon name="chevr" size="xs" />Open transcript</Link> : null}
       </div>

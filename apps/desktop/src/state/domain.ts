@@ -97,8 +97,14 @@ export function canInterrupt(s: Pick<SessionSnapshot, "capabilities" | "phase">)
   return s.capabilities.interrupt && (s.phase.state === "starting" || s.phase.state === "working" || s.phase.state === "needs_you");
 }
 
+/** How many of the session's subagents are running now. */
+export const runningSubagents = (s: Pick<SessionSnapshot, "subagents">): number => s.subagents.filter((x) => x.running).length;
+
 /** What Interrupt will do, as the tooltip says it: what the daemon stops depends on whether a turn is open. */
-export function interruptWords(s: Pick<SessionSnapshot, "phase" | "turn" | "background_running">): string {
+export function interruptWords(s: Pick<SessionSnapshot, "phase" | "turn" | "background_running" | "subagents" | "capabilities">): string {
+  // With a turn open, Interrupt stops only that turn and background subagents of an agent that can run them keep running.
+  // With no turn open the daemon's interrupt stops the background work (as Claude's does), so that case keeps the words below.
+  if (s.turn && s.capabilities.subagents.background && runningSubagents(s) > 0) return "Stops the main agent; background sub-agents keep running";
   const n = s.background_running;
   const tasks = `${n} background task${n === 1 ? "" : "s"}`;
   const bg = backgroundOnly(s);

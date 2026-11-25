@@ -2,7 +2,22 @@
 
 /**
  * What a background task has used so far (claude `usage` of `task_progress` /
- * `task_notification`). As the agent reports it: cumulative for the task, never added to the
- * session's own usage.
+ * `task_notification`; a Kilo child session's tokens and cost). As the agent reports it:
+ * cumulative for the task, never added to the session's own usage.
+ *
+ * The token and cost fields are only set by drivers whose agent reports them per task; a
+ * reader that finds them `None` knows nothing about them, not that they are zero.
  */
-export type TaskUsage = { total_tokens: number, tool_uses: number, duration_ms: number, };
+export type TaskUsage = { total_tokens: number, tool_uses: number, duration_ms: number, 
+/**
+ * Prompt tokens the task sent to the model, when the agent reports them per task.
+ */
+input_tokens?: number | null, 
+/**
+ * Tokens the task's model responses held, when the agent reports them per task.
+ */
+output_tokens?: number | null, 
+/**
+ * Cost in USD of the task, when the agent reports it per task.
+ */
+cost_usd?: number | null, };

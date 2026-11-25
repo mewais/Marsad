@@ -50,6 +50,11 @@ export interface Actions {
   interrupt(key: SessionKey): Promise<boolean>;
   /** Stop one background task or subagent the agent runs, by the agent's task id (the `stop_task` command). */
   stopTask(key: SessionKey, taskId: string): Promise<boolean>;
+  /**
+   * Send a message to a subagent that is running, by its task id (the `steer_subagent` command). It reads the message
+   * at its next step; the session's own turn is not touched. Resolves true when the daemon took it.
+   */
+  steerSubagent(key: SessionKey, taskId: string, text: string): Promise<boolean>;
   /** Compact the agent's conversation context now (the `compact` command). Resolves true when the host accepted it. */
   compact(key: SessionKey): Promise<boolean>;
   /**
@@ -96,6 +101,7 @@ export function isGateWithdrawn(e: unknown): boolean {
 /** Pending-flag keys of the session actions (the buttons that start them show their state). */
 export const interruptPendingKey = (key: SessionKey) => `cmd:${key}:interrupt`;
 export const stopTaskPendingKey = (key: SessionKey, taskId: string) => `cmd:${key}:stop_task:${taskId}`;
+export const steerPendingKey = (key: SessionKey, taskId: string) => `cmd:${key}:steer_subagent:${taskId}`;
 export const endPendingKey = (key: SessionKey) => `end:${key}`;
 export const compactPendingKey = (key: SessionKey) => `cmd:${key}:compact`;
 export const forkPendingKey = (key: SessionKey) => `fork:${key}`;
@@ -202,6 +208,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
     record: diag.log,
     interrupt: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
     stopTask: (key, taskId) => command(key, { command: "stop_task", task_id: taskId }, { pendingKey: stopTaskPendingKey(key, taskId), failTitle: "Could not stop the task" }),
+    steerSubagent: (key, taskId, text) => command(key, { command: "steer_subagent", task_id: taskId, text }, { pendingKey: steerPendingKey(key, taskId), failTitle: "Could not message the subagent" }),
     compact: (key) => command(key, { command: "compact" }, { pendingKey: compactPendingKey(key), failTitle: "Could not compact the session" }),
     fork: (key, name) => {
       const { host, id } = splitKey(key);

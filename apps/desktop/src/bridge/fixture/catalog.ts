@@ -1,10 +1,17 @@
-import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, HostEntry, LinkState, ModelInfo, NotContinuable, ResumableSession, ResumeCommand, SessionMode, SessionSnapshot, SlashCommandInfo } from "../wire";
+import type { ConfigItem, DriverCapabilities, PromptInput, SubagentSupport, DriverInventory, HostEntry, LinkState, ModelInfo, NotContinuable, ResumableSession, ResumeCommand, SessionMode, SessionSnapshot, SlashCommandInfo } from "../wire";
 
 /** Fixture-only data: drivers and hosts as discovery and the hub would report them. */
 
+/** What a driver that reports nothing about its subagents says. */
+const NO_SUBAGENTS: SubagentSupport = { transcript: false, live_state: false, usage: false, steer: false, background: false };
+/** What Claude reports (as its Wasit driver does): a subagent's live state and background runs; no transcript, usage or steering here. */
+const CLAUDE_SUBAGENTS: SubagentSupport = { transcript: false, live_state: true, usage: false, steer: false, background: true };
+/** What Kilo's and OpenCode's subagents can do here: their transcripts, live state and usage, steering, and background runs. */
+const SUBAGENTS_ALL: SubagentSupport = { transcript: true, live_state: true, usage: true, steer: true, background: true };
+
 const caps = (over: Partial<DriverCapabilities> = {}): DriverCapabilities => ({
   interrupt: true, set_model: true, set_mode: true, slash_commands: true, permission_gates: true, questions: true, plan_gate: true,
-  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, earlier_history: "wire", fork: false, compact: false, run_shell: false, ...over,
+  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, earlier_history: "wire", fork: false, compact: false, run_shell: false, subagents: NO_SUBAGENTS, ...over,
 });
 
 /** What each real driver reports (Wasit descriptors). */
@@ -36,7 +43,7 @@ const mcp = (name: string, scope: string, path: string, command: string, args: s
 
 export const DRIVERS: DriverDef[] = [
   {
-    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true, earlier_history: "storage", fork: true, compact: true }), prompt_input: promptInput("path_reference"), version: "2.1.4",
+    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true, earlier_history: "storage", fork: true, compact: true, subagents: CLAUDE_SUBAGENTS }), prompt_input: promptInput("path_reference"), version: "2.1.4",
     models: [m("claude-sonnet-4.5", true, "claude-sonnet-4.5", "Balanced"), m("claude-opus-4.1", false, "claude-opus-4.1", "Most capable"), m("claude-haiku-4.5", false, "claude-haiku-4.5", "Fast")],
     modes: [
       { id: "default", label: "Default", description: "Ask before edits and commands" },
@@ -86,7 +93,7 @@ export const DRIVERS: DriverDef[] = [
     resumeArgv: (id) => ["codex", "resume", id],
   },
   {
-    id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol" }), prompt_input: promptInput("embedded"), version: "1.3.2",
+    id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol", subagents: SUBAGENTS_ALL }), prompt_input: promptInput("embedded"), version: "1.3.2",
     models: [m("anthropic/claude-sonnet-4.5", true, "claude-sonnet-4.5 (anthropic)"), m("openai/gpt-5", false, "gpt-5 (openai)")],
     modes: [
       { id: "build", label: "Build", description: "Full tool access" },
@@ -101,7 +108,7 @@ export const DRIVERS: DriverDef[] = [
     resumeArgv: null,
   },
   {
-    id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }), prompt_input: promptInput("embedded"), version: "7.8.27",
+    id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false, subagents: SUBAGENTS_ALL }), prompt_input: promptInput("embedded"), version: "7.8.27",
     models: [m("kilo/claude-sonnet-4.5", true), m("kilo/gpt-5")],
     modes: [
       { id: "code", label: "Code", description: "" },

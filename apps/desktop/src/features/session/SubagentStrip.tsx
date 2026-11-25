@@ -30,7 +30,7 @@ export function SubagentStrip({
   sessionKey: SessionKey;
   host: string;
   id: string;
-  snap: Pick<SessionSnapshot, "subagents">;
+  snap: Pick<SessionSnapshot, "subagents" | "capabilities">;
   selected?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -83,7 +83,7 @@ export function SubagentStrip({
           <div id={panelId} className="substrip-list" data-testid="subagent-strip-list">
             {visible.length ? (
               visible.map((s) => (
-                <SubagentRow key={s.call_id} sessionKey={sessionKey} host={host} id={id} s={s} selected={s.call_id === selected} />
+                <SubagentRow key={s.call_id} sessionKey={sessionKey} host={host} id={id} s={s} selected={s.call_id === selected} caps={snap.capabilities.subagents} />
               ))
             ) : (
               <div className="substrip-empty faint" data-testid="subagent-strip-empty">

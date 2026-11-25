@@ -1,10 +1,10 @@
 import { memo } from "react";
-import type { SessionKey, SessionSnapshot, SubagentInfo, TaskInfo } from "../../bridge/wire";
+import type { SessionKey, SessionSnapshot, SubagentInfo, SubagentSupport, TaskInfo } from "../../bridge/wire";
 import { elapsed } from "../../lib/format";
 import { Link, sessionPath } from "../../router";
 import { stopTaskPendingKey, useActions, useAppState, usePending, useSessionReach, useSessionView } from "../../state";
-import { Button, Icon, useNow } from "../../ui";
-import { otherBackgroundTasks, taskElapsedMs, taskLabel, taskState, type TaskState } from "./tasks";
+import { Button, Icon, STATUS, useNow } from "../../ui";
+import { otherBackgroundTasks, subagentFacts, subagentState, taskElapsedMs, taskLabel, type SubagentState } from "./tasks";
 
 /** How long a task or subagent has run (it ticks while it runs) or ran. */
 export function Elapsed({ t }: { t: { started_at_ms: number; ended_at_ms?: number | null; running: boolean } }) {
@@ -12,8 +12,11 @@ export function Elapsed({ t }: { t: { started_at_ms: number; ended_at_ms?: numbe
   return <>{elapsed(taskElapsedMs(t, now))}</>;
 }
 
-/** The icon and colour class of a task state. */
-export const stateIcon = (s: TaskState) => ({ icon: s.tone === "working" ? "working" : s.tone === "failed" ? "failed" : "done", cls: `c-${s.tone}` }) as const;
+/** The icon and colour class of a subagent's state. Stopped and unknown read as neutral, not as a failure or a success. */
+export const subagentIcon = (st: SubagentState) => {
+  const cls = st.status === "working" ? "c-working" : st.status === "done" ? "c-done" : st.status === "failed" ? "c-failed" : "faint";
+  return { icon: STATUS[st.status].icon, cls } as const;
+};
 
 /**
  * Stop one task the agent runs (`stop_task`). Offered only where the agent can: the capability says so. It shows
@@ -36,19 +39,30 @@ export function StopTask({ sessionKey, taskId, what }: { sessionKey: SessionKey;
 /** What a subagent is called: the agent's type for it, else its tool's name. */
 export const subagentName = (s: Pick<SubagentInfo, "subagent_type" | "name">): string => s.subagent_type || s.name;
 
-const calls = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
+/**
+ * What a subagent has used, as its facts and how long it has run (or ran): the figures the driver's capabilities say it
+ * reports, and none it does not.
+ */
+export function SubagentMeta({ s, caps }: { s: SubagentInfo; caps: SubagentSupport }) {
+  return (
+    <>
+      {subagentFacts(s, caps).map((f) => <span key={f}>{f} · </span>)}
+      <Elapsed t={s} />
+    </>
+  );
+}
 
-export const SubagentRow = memo(function SubagentRow({ sessionKey, host, id, s, selected }: { sessionKey: SessionKey; host: string; id: string; s: SubagentInfo; selected: boolean }) {
-  const st = taskState(s);
-  const { icon, cls } = stateIcon(st);
+export const SubagentRow = memo(function SubagentRow({ sessionKey, host, id, s, selected, caps }: { sessionKey: SessionKey; host: string; id: string; s: SubagentInfo; selected: boolean; caps: SubagentSupport }) {
+  const st = subagentState(s);
+  const { icon, cls } = subagentIcon(st);
   const label = s.description || subagentName(s);
   return (
     <div className="subrow" data-testid="subagent-strip-row" data-running={s.running ? "" : undefined} data-selected={selected ? "" : undefined}>
       <Icon name={icon} size="sm" spin={s.running} className={cls} />
       <b className="subrow-name ell">{subagentName(s)}</b>
       <span className="subrow-desc ell" title={[s.model, s.description].filter(Boolean).join(" · ") || undefined}>{s.description}</span>
-      <span className={`subrow-st ${cls}`}>{st.word}</span>
-      <span className="subrow-meta faint tnum">{calls(s.tool_calls)} · <Elapsed t={s} /></span>
+      <span className={`subrow-st ${cls}`} title={st.why}>{st.word}</span>
+      <span className="subrow-meta faint tnum"><SubagentMeta s={s} caps={caps} /></span>
       <span className="subrow-acts">
         {s.running && s.task_id ? <StopTask sessionKey={sessionKey} taskId={s.task_id} what={`subagent ${label}`} /> : null}
         <Link

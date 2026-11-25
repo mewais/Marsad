@@ -1,4 +1,6 @@
-import type { SessionSnapshot, SubagentInfo, TaskInfo, TurnOrigin } from "../../bridge/wire";
+import type { SessionSnapshot, SubagentInfo, SubagentSupport, TaskInfo, TaskOutcome, TurnOrigin } from "../../bridge/wire";
+import { compactNumber, money } from "../../lib/format";
+import type { StatusKey } from "../../ui/status";
 
 /**
  * The words for the work an agent runs besides its own turn: subagents and background tasks. Everything
@@ -6,26 +8,34 @@ import type { SessionSnapshot, SubagentInfo, TaskInfo, TurnOrigin } from "../../
  * word the agent chose (a task's kind, its status) is shown as the agent said it, never mapped to a rule.
  */
 
-/** What the UI shows of a task's or a subagent's state: the pill's tone and word. */
-export interface TaskState {
-  tone: "working" | "done" | "failed";
+/** What the UI shows of a subagent's state: the status key (icon and colour) and the word. */
+export interface SubagentState {
+  status: StatusKey;
   word: string;
+  /** Why the word is what it is, for what the word alone does not say (shown as a tooltip). */
+  why?: string;
 }
 
-const sentence = (s: string): string => {
-  const t = s.replace(/_/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
+/**
+ * How each outcome of a subagent reads. `stopped` is shown as Stopped (not as a failure); `lost` and `unknown` say
+ * what the daemon could not know, never a guess of success.
+ */
+const OUTCOMES: Record<TaskOutcome, SubagentState> = {
+  completed: { status: "done", word: "Finished" },
+  failed: { status: "failed", word: "Failed" },
+  stopped: { status: "ended", word: "Stopped" },
+  lost: { status: "failed", word: "Lost", why: "The agent process ended while it ran." },
+  unknown: { status: "idle", word: "Unknown", why: "State not available." },
 };
 
 /**
- * Running until the daemon says the agent's task ended (a backgrounded subagent keeps running long after the
- * tool call that started it returned); then the agent's verdict: finished, or its own status word.
+ * A subagent's state, from the daemon's facts: Working while its task runs; then its outcome. An outcome the agent did
+ * not name in the shared vocabulary falls back to its `ok` flag; with neither, the state is not available (Unknown).
  */
-export function taskState(t: { running: boolean; ok?: boolean | null; status?: string | null }): TaskState {
-  if (t.running) return { tone: "working", word: "Running" };
-  if (t.ok === true) return { tone: "done", word: "Finished" };
-  if (t.ok === false) return { tone: "failed", word: t.status ? sentence(t.status) : "Failed" };
-  return { tone: "done", word: t.status ? sentence(t.status) : "Ended" };
+export function subagentState(s: { running: boolean; outcome?: TaskOutcome | null; ok?: boolean | null }): SubagentState {
+  if (s.running) return { status: "working", word: "Working" };
+  const outcome: TaskOutcome | undefined = s.outcome ?? (s.ok === true ? "completed" : s.ok === false ? "failed" : undefined);
+  return outcome ? OUTCOMES[outcome] : OUTCOMES.unknown;
 }
 
 /** What a task is called: its description, else the agent's word for its kind. */
@@ -61,4 +71,21 @@ export function taskEndedWords(t: { kind: string; description?: string; backgrou
 /** Why the agent says it ran a turn nobody asked for: its own word, and the task it answers when the event names one we know. */
 export function originWords(o: TurnOrigin, task?: { kind: string; description?: string }): string {
   return `origin: ${o.kind}${o.producer ? ` (${o.producer})` : ""}${task ? ` · ${taskLabel(task)}` : ""}`;
+}
+
+/** What a driver that reports nothing about its subagents says: no figure is shown for any of them. */
+export const NO_SUBAGENT_SUPPORT: SubagentSupport = { transcript: false, live_state: false, usage: false, steer: false, background: false };
+
+/**
+ * What the agent reports about a subagent beyond its state, as the words shown for it. Only what the driver's
+ * capabilities say it reports is shown: an agent that does not report counts or usage gets no figure at all, never a "0".
+ */
+export function subagentFacts(s: Pick<SubagentInfo, "tool_calls" | "usage">, caps: SubagentSupport): string[] {
+  const facts: string[] = [];
+  if (caps.live_state) facts.push(`${s.tool_calls} tool call${s.tool_calls === 1 ? "" : "s"}`);
+  if (caps.usage && s.usage) {
+    facts.push(`${compactNumber(s.usage.total_tokens)} tokens`);
+    if (s.usage.cost_usd != null) facts.push(money(s.usage.cost_usd));
+  }
+  return facts;
 }

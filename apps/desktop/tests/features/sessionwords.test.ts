@@ -32,7 +32,7 @@ describe("the daemon's verdict on continuing, in words", () => {
 describe("interrupt and Esc", () => {
   /** `turn`: a turn is open; `background`: tasks running in the background. */
   const snap = (state: SessionSnapshot["phase"]["state"], interrupt = true, turn = true, background = 0) =>
-    ({ capabilities: { interrupt }, phase: { state }, turn: turn ? { started_at_ms: 0, trigger: "input", tool_calls: 0 } : null, background_running: background }) as Pick<SessionSnapshot, "capabilities" | "phase" | "turn" | "background_running">;
+    ({ capabilities: { interrupt, subagents: { background: false } }, phase: { state }, turn: turn ? { started_at_ms: 0, trigger: "input", tool_calls: 0 } : null, background_running: background, subagents: [] }) as unknown as Pick<SessionSnapshot, "capabilities" | "phase" | "turn" | "background_running" | "subagents">;
 
   it("the button interrupts a turn that starts, runs or waits for a decision, when the agent can be interrupted", () => {
     for (const s of ["starting", "working", "needs_you"] as const) expect(canInterrupt(snap(s))).toBe(true);

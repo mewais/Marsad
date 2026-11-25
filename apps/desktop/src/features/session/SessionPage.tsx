@@ -4,7 +4,7 @@ import { money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { isTyping } from "../../shortcuts/registry";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { backgroundWords, canInterrupt, endPendingKey, escapeInterrupts, interruptPendingKey, interruptWords, notContinuableWords, phaseWord, selectView, sessionVersionState, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, usePending, useSessionReach, useSessionView } from "../../state";
+import { backgroundWords, canInterrupt, endPendingKey, escapeInterrupts, interruptPendingKey, interruptWords, notContinuableWords, phaseWord, runningSubagents, selectView, sessionVersionState, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, usePending, useSessionReach, useSessionView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, ErrorBoundary, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
 import { ContinueButton } from "../common/SessionBits";
@@ -63,6 +63,8 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
   const api = useApi();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** The running sub-agents the end would stop, counted when the question is asked (null: not asked). */
+  const [confirmEnd, setConfirmEnd] = useState<number | null>(null);
   const [subStripOpen, setSubStripOpen] = useState(false);
   const [subStripFilter, setSubStripFilter] = useState<SubagentFilter | null>(null);
   const saveName = () => {
@@ -70,6 +72,11 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
     setRenaming(null);
     if (name === (snap?.display_name ?? "")) return;
     void actions.run(`rename:${key}`, "Could not rename the session", () => api.renameSession(host, id, name || null));
+  };
+  // Ending an agent that owns background subagents (the driver says they outlive the turn) stops them too: asked first.
+  const endAgent = () => {
+    setConfirmEnd(null);
+    void actions.endSession(key);
   };
   const remove = async () => {
     setConfirmDelete(false);
@@ -138,7 +145,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
             {cont.kind === "running" ? (
               <>
                 <Button size="sm" icon="pause" pending={interruptPending} blocked={reach} disabled={!canInterrupt(snap)} title={interruptWords(snap)} onClick={() => void actions.interrupt(key)}>Interrupt</Button>
-                <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => void actions.endSession(key)}>End session</Button>
+                <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => (snap.capabilities.subagents.background && runningSubagents(snap) > 0 ? setConfirmEnd(runningSubagents(snap)) : endAgent())}>End session</Button>
                 <CompactButton sessionKey={key} snap={snap} blocked={reach} />
                 <ForkButton host={host} sessionKey={key} snap={snap} blocked={reach} />
               </>
@@ -197,7 +204,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
                 filter={subStripFilter}
                 onFilterChange={setSubStripFilter}
               />
-              {sub ? <SubagentFoot snap={snap} callId={sub} /> : <Composer sessionKey={key} snap={snap} />}
+              {sub ? <SubagentFoot sessionKey={key} snap={snap} callId={sub} /> : <Composer sessionKey={key} snap={snap} />}
             </MediaCtx.Provider>
           </div>
           <aside className="side" aria-label="Session details">
@@ -232,6 +239,9 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
           </aside>
         </div>
       )}
+      <ConfirmDialog open={confirmEnd != null} title={`End ${v.name}?`} confirmLabel="End session" danger onConfirm={endAgent} onClose={() => setConfirmEnd(null)}>
+        Shuts the agent down. The session is kept and can be continued. This also stops {confirmEnd} running sub-agent{confirmEnd === 1 ? "" : "s"}.
+      </ConfirmDialog>
       <ConfirmDialog open={confirmDelete} title={`Delete ${v.name}?`} confirmLabel="Delete session" danger onConfirm={() => void remove()} onClose={() => setConfirmDelete(false)}>
         Removes the session and its transcript from {hostLink?.name ?? host}. The agent's own conversation files are kept, so it can still be resumed from the agent's history.
       </ConfirmDialog>

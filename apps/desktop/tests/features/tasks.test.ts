@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentInfo, TaskInfo } from "../../src/bridge/wire";
-import { orderSubagents, otherBackgroundTasks, originWords, taskElapsedMs, taskEndedWords, taskStartedWords, taskState } from "../../src/features/session/tasks";
+import { NO_SUBAGENT_SUPPORT, orderSubagents, otherBackgroundTasks, originWords, subagentFacts, subagentState, taskElapsedMs, taskEndedWords, taskStartedWords } from "../../src/features/session/tasks";
 import { elapsed } from "../../src/lib/format";
 import { parseRoute, sessionPath } from "../../src/router";
 
@@ -8,13 +8,32 @@ const sub = (call_id: string, o: Partial<SubagentInfo> = {}): SubagentInfo => ({
 const task = (task_id: string, o: Partial<TaskInfo> = {}): TaskInfo => ({ task_id, kind: "local_bash", background: true, started_at_ms: 0, running: true, ...o });
 
 describe("task and subagent state", () => {
-  it("is running until the agent's task ended; then finished, or the agent's own word", () => {
-    expect(taskState({ running: true })).toEqual({ tone: "working", word: "Running" });
-    expect(taskState({ running: false, ok: true, status: "completed" })).toEqual({ tone: "done", word: "Finished" });
-    expect(taskState({ running: false, ok: false, status: "stopped" })).toEqual({ tone: "failed", word: "Stopped" });
-    expect(taskState({ running: false, ok: false })).toEqual({ tone: "failed", word: "Failed" });
-    expect(taskState({ running: false, status: "process_ended" })).toEqual({ tone: "done", word: "Process ended" });
-    expect(taskState({ running: false })).toEqual({ tone: "done", word: "Ended" });
+  it("is Working while the agent's task runs; then its outcome, in the shared vocabulary", () => {
+    expect(subagentState({ running: true })).toEqual({ status: "working", word: "Working" });
+    expect(subagentState({ running: false, outcome: "completed" })).toEqual({ status: "done", word: "Finished" });
+    expect(subagentState({ running: false, outcome: "failed" })).toEqual({ status: "failed", word: "Failed" });
+    expect(subagentState({ running: false, outcome: "stopped" })).toEqual({ status: "ended", word: "Stopped" });
+    expect(subagentState({ running: false, outcome: "lost" })).toEqual({ status: "failed", word: "Lost", why: "The agent process ended while it ran." });
+    expect(subagentState({ running: false, outcome: "unknown" })).toEqual({ status: "idle", word: "Unknown", why: "State not available." });
+  });
+
+  it("an ended subagent with no outcome says what it can: its ok flag, else that the state is not available", () => {
+    expect(subagentState({ running: false, ok: true })).toEqual({ status: "done", word: "Finished" });
+    expect(subagentState({ running: false, ok: false })).toEqual({ status: "failed", word: "Failed" });
+    expect(subagentState({ running: false, outcome: null, ok: null })).toEqual({ status: "idle", word: "Unknown", why: "State not available." });
+    // A word the agent chose is not shown as a state of its own.
+    expect(subagentState({ running: false })).toEqual({ status: "idle", word: "Unknown", why: "State not available." });
+  });
+
+  it("a subagent's facts are shown only as the capabilities report them: never a zero for an unreported figure", () => {
+    const usage = { total_tokens: 12_400, tool_uses: 3, duration_ms: 1000, cost_usd: 0.42 };
+    const reported = { ...NO_SUBAGENT_SUPPORT, live_state: true, usage: true };
+    expect(subagentFacts({ tool_calls: 3, usage }, reported)).toEqual(["3 tool calls", "12k tokens", "$0.42"]);
+    expect(subagentFacts({ tool_calls: 3, usage }, { ...NO_SUBAGENT_SUPPORT, live_state: true })).toEqual(["3 tool calls"]);
+    expect(subagentFacts({ tool_calls: 3, usage }, { ...NO_SUBAGENT_SUPPORT, usage: true })).toEqual(["12k tokens", "$0.42"]);
+    expect(subagentFacts({ tool_calls: 0, usage: null }, reported)).toEqual(["0 tool calls"]);
+    expect(subagentFacts({ tool_calls: 0, usage: null }, NO_SUBAGENT_SUPPORT)).toEqual([]);
+    expect(subagentFacts({ tool_calls: 2, usage: { ...usage, cost_usd: null } }, reported)).toEqual(["2 tool calls", "12k tokens"]);
   });
 
   it("elapsed time runs to now while it runs and stops when it ended", () => {

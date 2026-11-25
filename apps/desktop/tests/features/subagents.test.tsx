@@ -39,7 +39,7 @@ describe("the main transcript is the session's own conversation", () => {
     // The tool calls that started them returned at once; the billing subagent is still running because its task has not ended.
     expect(billing).toHaveTextContent("Subagent · Explore");
     expect(billing).toHaveTextContent("Audit the billing routes");
-    expect(within(billing).getByText("Running")).toBeInTheDocument();
+    expect(within(billing).getByText("Working")).toBeInTheDocument();
     expect(within(billing).getByTestId("subagent-meta")).toHaveTextContent("3 tool calls");
     expect(within(invoice).getByText("Finished")).toBeInTheDocument();
     expect(within(invoice).getByTestId("subagent-meta")).toHaveTextContent("2 tool calls");
@@ -49,7 +49,7 @@ describe("the main transcript is the session's own conversation", () => {
     const backend = backgroundBackend();
     const { s } = await open(backend);
     const card = () => screen.getAllByTestId("subagent")[0];
-    await waitFor(() => expect(within(card()).getByText("Running")).toBeInTheDocument());
+    await waitFor(() => expect(within(card()).getByText("Working")).toBeInTheDocument());
     act(() => work(backend, s).endTask("task-bill", "completed", "Billing is guarded."));
     await waitFor(() => expect(within(card()).getByText("Finished")).toBeInTheDocument());
     expect(snap(backend, s).subagents.find((x) => x.call_id === "c-bill")).toMatchObject({ running: false, ok: true, status: "completed" });
@@ -99,7 +99,7 @@ describe("Activity lists the subagents in the strip above the composer; selectin
     const rows = within(list).getAllByTestId("subagent-strip-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent(/Explore.*Audit the billing routes/);
-    expect(rows[0]).toHaveTextContent("Running");
+    expect(rows[0]).toHaveTextContent("Working");
     expect(rows[0]).toHaveTextContent("3 tool calls");
     expect(rows[1]).toHaveTextContent(/Explore.*Audit the invoice routes/);
     expect(rows[1]).toHaveTextContent("Finished");
@@ -122,7 +122,7 @@ describe("Activity lists the subagents in the strip above the composer; selectin
     expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
     expect(screen.getByTestId("subagent-readonly")).toHaveTextContent("This is the transcript of the subagent “Audit the billing routes” (Explore). It is read only");
     expect(screen.getByTestId("subagent-bar")).toHaveTextContent("Subagent · Explore");
-    expect(screen.getByTestId("subagent-bar")).toHaveTextContent("Running");
+    expect(screen.getByTestId("subagent-bar")).toHaveTextContent("Working");
     // The row it was opened from is marked.
     expect(within(screen.getByTestId("subagent-strip-list")).getAllByRole("link")[0]).toHaveAttribute("aria-current", "page");
     await user.click(screen.getByTestId("subagent-back"));

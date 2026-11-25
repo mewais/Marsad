@@ -1,4 +1,4 @@
-import type { AgentEvent, HistoryScope, SessionEvent, SessionSnapshot, SubagentInfo, TaskInfo } from "../wire";
+import type { AgentEvent, HistoryScope, SessionEvent, SessionSnapshot, SubagentInfo, TaskInfo, TaskOutcome } from "../wire";
 
 /**
  * Fixture-only: what the engine's reducer makes of the events about subagents and background tasks
@@ -13,6 +13,7 @@ export const NO_WORK: Work = { tasks: [], subagents: [], background_running: 0 }
 
 const MAX_TASKS = 100;
 export const UNLISTED = "unlisted";
+export const LOST = "lost";
 export const TURN_ENDED = "turn_ended";
 export const PROCESS_ENDED = "process_ended";
 
@@ -94,6 +95,10 @@ function reduceTasks(before: readonly TaskInfo[], a: AgentEvent, t: number): Tas
   return tasks;
 }
 
+/** The shared outcome a task's status word is, when it is one (the daemon's `TaskOutcome` words); any other word has none. */
+const SHARED_OUTCOMES: readonly string[] = ["completed", "failed", "stopped", "lost", "unknown"];
+const outcomeOf = (status: string | null | undefined): TaskOutcome | null => (status && SHARED_OUTCOMES.includes(status) ? (status as TaskOutcome) : null);
+
 /** Each subagent shows what the agent's task for it says: the link is the spawning call, and the task decides whether it runs. */
 function syncSubagents(subagents: readonly SubagentInfo[], tasks: readonly TaskInfo[]): SubagentInfo[] {
   return subagents.map((s) => {
@@ -104,6 +109,7 @@ function syncSubagents(subagents: readonly SubagentInfo[], tasks: readonly TaskI
       task_id: task.task_id,
       running: task.running,
       status: task.status,
+      outcome: task.running ? null : outcomeOf(task.status),
       ok: task.running ? undefined : task.ok,
       ended_at_ms: task.ended_at_ms,
       subagent_type: task.subagent_type ?? s.subagent_type,
@@ -120,7 +126,7 @@ const subagentOf = (a: Extract<AgentEvent, { type: "tool_call_started" }>, t: nu
 
 /** What the tool call that started a subagent returning means: its end only for a subagent the agent reports no task for. */
 function finishCall(subagents: readonly SubagentInfo[], callId: string, ok: boolean, t: number): SubagentInfo[] {
-  return subagents.map((s) => (s.call_id === callId && !s.task_id ? { ...s, running: false, ok, ended_at_ms: t } : s));
+  return subagents.map((s) => (s.call_id === callId && !s.task_id ? { ...s, running: false, ok, outcome: ok ? "completed" : "failed", ended_at_ms: t } : s));
 }
 
 /** The work state after one agent event. */
@@ -144,8 +150,11 @@ export function reduceWork(w: Work, a: AgentEvent, t: number): Work {
 
 /** The process ended: nothing runs any more. */
 export function endAllWork(w: Work, t: number): Work {
-  const tasks = w.tasks.map((x) => (x.running ? { ...x, running: false, status: x.status ?? PROCESS_ENDED, ended_at_ms: t } : x));
-  return { tasks, subagents: syncSubagents(w.subagents, tasks), background_running: 0 };
+  // A subagent still running when its process ends is Lost: its real outcome is never known. Other tasks say the process ended.
+  const subTaskIds = new Set(w.subagents.map((s) => s.task_id).filter(Boolean));
+  const tasks = w.tasks.map((x) => (x.running ? { ...x, running: false, status: x.status ?? (subTaskIds.has(x.task_id) ? LOST : PROCESS_ENDED), ended_at_ms: t } : x));
+  const subagents = w.subagents.map((s) => (s.running && !s.task_id ? { ...s, running: false, status: LOST, outcome: "lost" as const, ended_at_ms: t } : s));
+  return { tasks, subagents: syncSubagents(subagents, tasks), background_running: 0 };
 }
 
 /** What a session's events say about its work (a scripted history's snapshot). */

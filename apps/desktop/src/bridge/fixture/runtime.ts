@@ -173,6 +173,13 @@ export class SessionSim {
         this.journal(e, c, trace);
         this.stopTask(e, c.task_id);
         return { outcome: "sent" };
+      case "steer_subagent": {
+        // Only an agent that can steer takes it, and only into a subagent that is running; the message is read at its next step.
+        if (!e.snap.capabilities.subagents.steer) throw err("unsupported", "this agent cannot steer a subagent", { error: "unsupported" });
+        if (!e.snap.subagents.some((x) => x.task_id === c.task_id && x.running)) throw err("rejected", `Subagent task ${c.task_id} is not running.`, { error: "rejected", reason: "subagent not running" });
+        this.journal(e, c, trace);
+        return { outcome: "sent" };
+      }
       case "run_shell": {
         // Only an agent whose driver can run a command in its own shell takes one. Its output reaches the transcript as the
         // agent's own tool row (`local_shell`, origin driver), as it does in the daemon.
