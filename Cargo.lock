@@ -513,7 +513,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1024,7 +1024,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1383,7 +1383,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1637,7 +1637,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1690,7 +1690,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1909,7 +1909,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1933,7 +1933,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1942,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1951,7 +1951,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -1970,7 +1970,7 @@ dependencies = [
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "base64",
  "serde",
@@ -1982,7 +1982,7 @@ dependencies = [
 [[package]]
 name = "wasit-diag"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "serde",
  "serde_json",
@@ -1996,7 +1996,7 @@ dependencies = [
 [[package]]
 name = "wasit-fake-cli"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "base64",
  "libc",
@@ -2012,16 +2012,18 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
+ "getrandom 0.4.3",
  "serde_json",
  "wasit-core",
+ "wasit-process",
 ]
 
 [[package]]
 name = "wasit-process"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "libc",
  "tokio",
@@ -2031,7 +2033,7 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "async-trait",
  "base64",
@@ -2058,7 +2060,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=session-flows#1315bb878be42a3d212106902c28ebb19c0e6eec"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9096981c07183ef5f89dbdc13e6cfe4892614094"
 dependencies = [
  "futures-core",
  "libc",
@@ -2074,7 +2076,7 @@ dependencies = [
 [[package]]
 name = "wasl-audit"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=session-flows#fef0b92187bc75df6dd47e38a57e38e20e00c1f7"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#a5fb553435d15abba862cdec2045893f30780f95"
 dependencies = [
  "serde",
  "serde_json",
@@ -2086,7 +2088,7 @@ dependencies = [
 [[package]]
 name = "wasl-mcp"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=session-flows#fef0b92187bc75df6dd47e38a57e38e20e00c1f7"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#a5fb553435d15abba862cdec2045893f30780f95"
 dependencies = [
  "rmcp",
  "serde",
@@ -2102,7 +2104,7 @@ dependencies = [
 [[package]]
 name = "wasl-node"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=session-flows#fef0b92187bc75df6dd47e38a57e38e20e00c1f7"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#a5fb553435d15abba862cdec2045893f30780f95"
 dependencies = [
  "async-trait",
  "futures",
@@ -2120,7 +2122,7 @@ dependencies = [
 [[package]]
 name = "wasl-proto"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=session-flows#fef0b92187bc75df6dd47e38a57e38e20e00c1f7"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#a5fb553435d15abba862cdec2045893f30780f95"
 dependencies = [
  "fastrand",
  "serde",
@@ -2196,7 +2198,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
