@@ -457,7 +457,7 @@ impl HubServices {
             }
             methods::HOSTS_RECONNECT => {
                 let r: HostRef = params(p).map_err(dec)?;
-                self.registry.reconnect(&r.id)?;
+                self.registry.reconnect(&r.id).await?;
                 enc(ok(Ack {}))
             }
             methods::HOSTS_SIGNOUT => {

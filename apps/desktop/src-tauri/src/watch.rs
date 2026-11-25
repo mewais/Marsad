@@ -213,11 +213,37 @@ pub(crate) fn resubscribes_on(link: &LinkState) -> bool {
     link.is_connected()
 }
 
+/// What happens to the fleet subscription after it failed or closed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AfterFailure {
+    /// Started again now: the failure itself is the event that says the topic must be asked again.
+    Resubscribe,
+    /// Not started until the hub link changes.
+    WaitForLink,
+}
+
+/// Decide what a failed or closed fleet subscription does next.
+///
+/// `silent_restart` says the subscription that failed was itself started by a failure and
+/// delivered nothing. The daemon would most likely fail it again, so that is not asked again at
+/// once: the hub link's next change starts it. This bounds the restarts to one per link state, so
+/// no loop of refused subscriptions can run without an event between them.
+pub(crate) fn after_failure(link: &LinkState, silent_restart: bool) -> AfterFailure {
+    if resubscribes_on(link) && !silent_restart {
+        AfterFailure::Resubscribe
+    } else {
+        AfterFailure::WaitForLink
+    }
+}
+
 /// Run the watcher (forever, unless the link to the daemon itself is gone).
 pub async fn run(app: AppHandle) {
     let shell = app.state::<Shell>();
-    // `None` while the fleet subscription has failed: it is started again when the hub link is back.
+    // `None` while the fleet subscription is down: after a failure it is started again at once
+    // (see [`after_failure`]), otherwise when the hub link is back.
     let mut sub = Some(shell.client.fleet(None));
+    // The current subscription was started by a failure, and has delivered nothing since.
+    let mut silent_restart = false;
     let mut link = shell.client.link().state();
     let mut tracker = Tracker::default();
     let mut hosts: Vec<FleetHost> = Vec::new();
@@ -236,19 +262,23 @@ pub async fn run(app: AppHandle) {
             }, if sub.is_some() => {
                 let ev = match item {
                     Some(Ok((_, ev))) => ev,
-                    Some(Err(e)) => {
+                    failed => {
                         // No notification, tray count or host link update until the subscription
                         // is back; the reason goes to the app log.
-                        diag::failed("fleet_feed", &e);
-                        sub = None;
-                        continue;
-                    }
-                    None => {
-                        diag::failed("fleet_feed", &"the daemon closed the fleet topic");
-                        sub = None;
+                        match failed {
+                            Some(Err(e)) => diag::failed("fleet_feed", &e),
+                            _ => diag::failed("fleet_feed", &"the daemon closed the fleet topic"),
+                        }
+                        let again = after_failure(&daemon, silent_restart);
+                        silent_restart = again == AfterFailure::Resubscribe;
+                        sub = match again {
+                            AfterFailure::Resubscribe => Some(shell.client.fleet(None)),
+                            AfterFailure::WaitForLink => None,
+                        };
                         continue;
                     }
                 };
+                silent_restart = false;
                 apply(&mut hosts, &ev);
                 let notes = tracker.apply(&ev);
                 crate::tray::set_attention(&app, tracker.attention());
@@ -265,6 +295,7 @@ pub async fn run(app: AppHandle) {
                 // A fresh subscription starts with a `reset` of the hosts, which replaces what is held.
                 if sub.is_none() && resubscribes_on(&daemon) {
                     sub = Some(shell.client.fleet(None));
+                    silent_restart = false;
                 }
                 publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
             }
@@ -348,6 +379,22 @@ mod tests {
             reason: "cannot start marsad-agent".into(),
             problem: None,
         }));
+    }
+
+    #[test]
+    fn a_failed_fleet_subscription_is_started_again_on_the_error_itself() {
+        let hello = wasit_control::Hello::new("test", "marsad-desktop", "gui");
+        let up = LinkState::Connected { hello };
+        // The error is the event: the subscription is asked again without waiting for the link.
+        assert_eq!(after_failure(&up, false), AfterFailure::Resubscribe);
+        // The daemon failed the fresh subscription before it delivered anything: asked again only
+        // when the link changes, so refusals cannot follow each other without an event between.
+        assert_eq!(after_failure(&up, true), AfterFailure::WaitForLink);
+        // Without a connected hub link there is nothing to ask.
+        assert_eq!(
+            after_failure(&LinkState::Connecting, false),
+            AfterFailure::WaitForLink
+        );
     }
 
     #[test]

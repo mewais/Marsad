@@ -61,8 +61,19 @@ pub enum Check {
     Alive,
     /// There is none (no socket, or a socket nobody listens on, which was removed).
     Absent,
-    /// The check itself failed or did not answer; ssh's words.
+    /// The check itself failed or did not answer; ssh's words. This is NOT [`Check::Absent`]: the
+    /// connection may well be open (a busy or wedged master, a check that timed out). Nothing
+    /// may conclude from it that the host has no connection.
     Unanswered(String),
+}
+
+impl Check {
+    /// Whether the connection may be open: it answered, or the question was not answered. Only
+    /// [`Check::Absent`] says there is none. A caller that decides "the host must wait for a
+    /// person because no connection carries it" must ask this, not compare with `Alive`.
+    pub fn may_be_open(&self) -> bool {
+        !matches!(self, Check::Absent)
+    }
 }
 
 #[derive(Default)]
@@ -116,6 +127,32 @@ async fn run_local(argv: Vec<String>) -> Result<Ran, String> {
         }),
         // Dropping the child kills it.
         None => Err("ssh did not answer".to_owned()),
+    }
+}
+
+/// Why ssh found no master behind the control socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketGone {
+    /// The socket file is gone (removed between the look and ssh's connect).
+    Missing,
+    /// A socket nobody listens on (the master was killed and left it).
+    Refused,
+}
+
+/// Reads ssh's own `Control socket connect(<path>): <error>` line, the only line that says the
+/// socket has no master behind it. Other lines of ssh's output may contain the same error texts
+/// (ssh's askpass helper that is not installed, say) and must not make a master look absent: a
+/// master that answers nothing is [`Check::Unanswered`], not absent.
+fn socket_gone(stderr: &str) -> Option<SocketGone> {
+    let line = stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("Control socket connect("))?;
+    if line.contains("Connection refused") {
+        Some(SocketGone::Refused)
+    } else if line.contains("No such file or directory") {
+        Some(SocketGone::Missing)
+    } else {
+        None
     }
 }
 
@@ -176,9 +213,16 @@ impl Masters {
         f(locked(&self.inner.hosts).entry(host.clone()).or_default())
     }
 
-    /// The host is gone or its route changed: nothing is remembered about its connection.
+    /// The host is gone or its route changed: nothing is remembered about its connection. Only
+    /// called once the connection is known to have ended: a connection whose exit failed is
+    /// still open, and stays tracked.
     pub fn forget(&self, host: &HostId) {
         locked(&self.inner.hosts).remove(host);
+    }
+
+    /// Whether anything is remembered about `host`'s connection.
+    pub fn tracked(&self, host: &HostId) -> bool {
+        locked(&self.inner.hosts).contains_key(host)
     }
 
     /// The user signed out of `host` (or asked to connect again: `false`).
@@ -307,19 +351,15 @@ impl Masters {
             // Nothing listens: the master was killed and left its socket. Or the socket went away
             // between the look above and ssh's connect: the master exited as it was checked, which
             // is the same news (the connection ended). Both are `Absent`, so the end is recorded.
-            Ok(Ran { stderr, .. })
-                if stderr.contains("Connection refused")
-                    || stderr.contains("No such file or directory") =>
-            {
+            Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => {
                 if let Err(e) = tokio::fs::remove_file(control).await {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         fs_failed(&entry.id, &e);
                     }
                 }
-                let state = if stderr.contains("Connection refused") {
-                    MasterState::Stale
-                } else {
-                    MasterState::Absent
+                let state = match socket_gone(&stderr) {
+                    Some(SocketGone::Refused) => MasterState::Stale,
+                    _ => MasterState::Absent,
                 };
                 (state, None, Check::Absent)
             }
@@ -416,7 +456,7 @@ impl Masters {
                         record(MasterExitOutcome::Ended, Some(0), None);
                         MasterExitOutcome::Ended
                     }
-                    Ok(Ran { stderr, .. }) if stderr.contains("Connection refused") => {
+                    Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => {
                         // A socket nobody listens on: there was no connection.
                         if let Err(e) = tokio::fs::remove_file(&control).await {
                             if e.kind() != std::io::ErrorKind::NotFound {
@@ -493,6 +533,69 @@ fn last_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control socket that accepts every connection and drops it at once: a master that
+    /// answers nothing. The accept loop runs until the returned handle is aborted.
+    fn dropping_socket(control: &Path) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(control).expect("bind the test socket");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        })
+    }
+
+    fn ssh_entry(id: &str) -> HostEntry {
+        HostEntry {
+            id: HostId::new(id),
+            name: id.into(),
+            kind: HostKind::Ssh {
+                target: "u@127.0.0.1".into(),
+                port: None,
+                identity_file: None,
+                options: Vec::new(),
+            },
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: true,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_check_is_not_an_absent_connection() {
+        let dir = std::env::temp_dir().join(format!("mrs-unanswered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let masters = Masters::new(dir.join("ssh"));
+        masters.prepare().await.unwrap();
+        let entry = ssh_entry("wedged");
+        let control = masters.path(&entry).unwrap();
+
+        assert_eq!(
+            masters.check(&entry, &control, None).await,
+            Check::Absent,
+            "no socket: there is no connection"
+        );
+        assert!(!Check::Absent.may_be_open());
+
+        let listener = dropping_socket(&control);
+        let check = masters.check(&entry, &control, None).await;
+        listener.abort();
+        assert!(
+            matches!(check, Check::Unanswered(_)),
+            "a socket that answers nothing is unanswered, not absent: {check:?}"
+        );
+        assert!(check.may_be_open(), "an unanswered connection may be open");
+        assert_eq!(
+            masters.ended_words(&entry.id),
+            None,
+            "an unanswered check records no end"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_reason_is_the_end_of_the_log_and_bounded() {

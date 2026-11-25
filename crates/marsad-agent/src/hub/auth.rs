@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use marsad_proto::diag::{CancelWhy, MarsadEvent};
 use marsad_proto::hosts::{AuthPrompt, PromptKind, SignInRepeat};
 use marsad_proto::{HostId, MarsadError};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use wasit_diag::Ident;
 
 use super::fleet::Fleet;
@@ -80,6 +80,20 @@ struct HostState {
     pending: Option<Pending>,
     /// The user asked for the next attempt.
     armed: bool,
+    /// What `attempt`'s prompts have come to, for whoever learns from it as it happens (see
+    /// [`Asking`]). `None` before an attempt has begun.
+    asking: Option<watch::Sender<Asking>>,
+}
+
+/// What a connect attempt's prompts have come to. `Waiting` until the attempt asks the user
+/// something ([`PromptKind::needs_user`]) or ends; `Asked` is final once set, so a watcher that
+/// looks late still sees it. Asked as the prompt is taken, not when the attempt's outcome is
+/// known: an attempt that is cut short or fails never gets to say what it asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asking {
+    Waiting,
+    Asked,
+    Ended,
 }
 
 impl HostState {
@@ -126,7 +140,7 @@ impl Prompts {
     /// of one Connect (the hub restarts the host's helper and connects again); the guard ends
     /// the attempt when it is dropped.
     pub fn begin_attempt(&self, host: &HostId, repeat: Option<SignInRepeat>) -> SignInAttempt {
-        let tag = {
+        let (tag, asking) = {
             let mut s = lock(&self.state);
             s.next_attempt += 1;
             let tag = s.next_attempt;
@@ -138,12 +152,15 @@ impl Prompts {
             h.round = 0;
             h.repeat = repeat;
             h.cancelled = false;
-            tag
+            let (tx, rx) = watch::channel(Asking::Waiting);
+            h.asking = Some(tx);
+            (tag, rx)
         };
         SignInAttempt {
             prompts: self.clone(),
             host: host.clone(),
             tag,
+            asking,
         }
     }
 
@@ -156,6 +173,16 @@ impl Prompts {
         {
             h.ended = true;
             h.withdraw(CancelWhy::AttemptEnded);
+            if let Some(tx) = &h.asking {
+                // An attempt that asked keeps saying so: `Asked` is never replaced.
+                tx.send_if_modified(|a| {
+                    let ended = *a == Asking::Waiting;
+                    if ended {
+                        *a = Asking::Ended;
+                    }
+                    ended
+                });
+            }
         }
     }
 
@@ -216,6 +243,11 @@ impl Prompts {
                 text: text.clone(),
             });
             let again = h.asked[h.round..].iter().filter(|a| a.text == text).count() as u32;
+            if kind.needs_user() {
+                if let Some(tx) = &h.asking {
+                    tx.send_replace(Asking::Asked);
+                }
+            }
             // The user's click is spent the moment the attempt asks them something.
             h.armed = false;
             let prompt = AuthPrompt {
@@ -332,12 +364,20 @@ pub struct SignInAttempt {
     prompts: Prompts,
     host: HostId,
     tag: u64,
+    asking: watch::Receiver<Asking>,
 }
 
 impl SignInAttempt {
     /// The attempt's number, for the ssh it starts to hand to its askpass helpers.
     pub fn tag(&self) -> u64 {
         self.tag
+    }
+
+    /// What the attempt's prompts have come to ([`Asking`]), as a receiver that outlives the
+    /// attempt's hold on them: a watcher can wait for the user to be asked without the attempt
+    /// (its future may be dropped at any time) having to stay in play.
+    pub fn asking(&self) -> watch::Receiver<Asking> {
+        self.asking.clone()
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut HostState) -> T) -> Option<T> {

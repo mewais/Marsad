@@ -48,8 +48,9 @@ fn feed_record(host: &HostId, event: FeedEvent, error: Option<ErrorInfo>) {
 pub(super) enum Step {
     /// One event.
     Event(serde_json::Value),
-    /// The service refused the subscription. The follow goes on: its next subscribe waits for the
-    /// link's next change.
+    /// The feed failed while the link may stay up: the service refused the subscription (retryable
+    /// or not), or ended the feed with the link up. The follow goes on: its next subscribe waits for
+    /// the link's next change, and the link itself is never dropped on this account.
     Refused(RpcError),
 }
 
@@ -57,8 +58,10 @@ pub(super) enum Step {
 ///
 /// It subscribes only while the link is up (`up` says so for the state it watches, and a live
 /// client is there): nothing is asked of a host that is down, so no request is made that can only
-/// fail. A subscription ends with its connection or with the service's verdict; either way the next
-/// subscribe waits for the next change of the link state (event-driven, no timers). With
+/// fail. A subscription ends with its connection, with the service's verdict, or with the feed
+/// ending while the link stays up (reported as a [`Step::Refused`]); the next subscribe waits for
+/// the next change of the link state (event-driven, no timers). A failed subscribe never reconnects
+/// the link: the link is the host's, and its own supervisor decides when it is down. With
 /// `reset_on_connect` the next subscribe starts from the beginning, so the service sends a full
 /// snapshot first; otherwise it resumes from the last cursor.
 pub(super) struct Follow<T> {
@@ -116,12 +119,8 @@ impl<T> Follow<T> {
                         self.fresh = false;
                     }
                     Err(e) => {
-                        let retryable = e.is_retryable();
+                        // Retryable or not, this is a feed error, not a reason to drop the link.
                         self.lost();
-                        if retryable {
-                            self.link.reconnect_now();
-                            continue;
-                        }
                         return Some(Step::Refused(e.into_rpc()));
                     }
                 }
@@ -140,7 +139,18 @@ impl<T> Follow<T> {
                     match reason {
                         // Resume from the last cursor at once: the link is still up.
                         CloseReason::Lagged => {}
-                        CloseReason::Ended | CloseReason::HostLost => self.lost(),
+                        // The link went with it: the next subscribe waits for the link.
+                        CloseReason::HostLost => self.lost(),
+                        // The feed ended while the link stayed up: the host's word that it has no
+                        // more to say is a refusal, shown as one and recovered on the next link
+                        // change (a reconnect starts with a snapshot).
+                        CloseReason::Ended => {
+                            self.lost();
+                            return Some(Step::Refused(RpcError::new(
+                                "ended",
+                                "the feed ended while the link stayed up",
+                            )));
+                        }
                         CloseReason::Error { error } => {
                             self.lost();
                             return Some(Step::Refused(error));

@@ -972,6 +972,34 @@ async fn a_prompt_of_an_ended_attempt_is_withdrawn_and_cannot_be_answered() {
     until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
 }
 
+/// A sign-in that asked the user and then failed (here: its ssh was killed under the prompt) has
+/// already taught the hub that the host needs the user at login: the mark is there with the
+/// failure, not only after a sign-in that worked. The host then waits for a click, and the failed
+/// attempt is not followed by another one on the hub's own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_in_that_asked_and_failed_marks_the_host_as_needing_the_user() {
+    let mut r = Rig::new().await;
+    r.add(passphrase_kind(&r.sshd, &r.key)).await;
+    let _p = prompt(&mut r.fleet, "pp").await;
+    let pid = r.link_pid().await;
+    kill_pid(pid);
+    until_all(
+        &mut r.fleet,
+        "pp marked as needing the user and parked after the failure",
+        &[&|e| interactive_mark(e, "pp", true), &|e| {
+            parked(e, "pp", false)
+        }],
+    )
+    .await;
+    // Everything the hub did before this record is read: one attempt, and no second one since.
+    let m = r.marker().await;
+    assert_eq!(
+        evs(&r.tail.seen[..m], "pp", "link.attempt_begin").len(),
+        1,
+        "a failed attempt that asked must not be followed by another on its own"
+    );
+}
+
 /// Removing a host takes its prompt off at once and refuses what is left of it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn removing_a_host_withdraws_its_prompt() {

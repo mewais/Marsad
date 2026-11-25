@@ -58,7 +58,7 @@ use marsad_proto::diag::{
 use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform, SignInRepeat};
 use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use wasit_control::wire::RpcError;
 use wasit_control::{
     classify_command_failure, Attempt, ClientOptions, CommandFailureKind, CommandSpec,
@@ -67,7 +67,7 @@ use wasit_control::{
 };
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
-use super::auth::{Prompts, SignInAttempt};
+use super::auth::{Asking, Prompts, SignInAttempt};
 use super::master::{Check, Masters};
 use super::transport::{
     bootstrap_argv_via, helper_target, native_windows_sign, platform_from, triple_platform,
@@ -670,6 +670,38 @@ fn os_word(os: &str) -> &str {
     }
 }
 
+async fn send_learned(learned: &mpsc::Sender<Learned>, l: Learned) {
+    let host = l.host().clone();
+    if learned.send(l).await.is_err() {
+        emit(MarsadEvent::HostsFailed {
+            host: Some(Ident::new(host.as_str())),
+            op: HostsOp::RegistryGone,
+            error: diag::ours("registry_gone", &"the hosts registry is gone"),
+        });
+    }
+}
+
+/// Learns that `host` needs the user at login as soon as an attempt asks the user something
+/// (its [`Asking`] becomes `Asked`), whatever becomes of the attempt. Learned from the outcome
+/// alone, a host would be taken for one that does not need the user for as long as its attempts
+/// fail or are cut short: they never reach the place that learns it, and the next one would ask
+/// (and push) all over again. The watcher ends with the attempt.
+fn learn_when_asked(
+    learned: mpsc::Sender<Learned>,
+    host: HostId,
+    mut asking: watch::Receiver<Asking>,
+) {
+    tokio::spawn(async move {
+        let asked = matches!(
+            asking.wait_for(|a| *a != Asking::Waiting).await.as_deref(),
+            Ok(Asking::Asked)
+        );
+        if asked {
+            send_learned(&learned, Learned::Interactive { host }).await;
+        }
+    });
+}
+
 impl BootstrapConnector {
     fn entry(&self, id: &HostId) -> Result<HostEntry, ConnectError> {
         self.entries
@@ -690,14 +722,7 @@ impl BootstrapConnector {
     }
 
     async fn learn(&self, l: Learned) {
-        let host = l.host().clone();
-        if self.learned.send(l).await.is_err() {
-            emit(MarsadEvent::HostsFailed {
-                host: Some(Ident::new(host.as_str())),
-                op: HostsOp::RegistryGone,
-                error: diag::ours("registry_gone", &"the hosts registry is gone"),
-            });
-        }
+        send_learned(&self.learned, l).await;
     }
 
     /// Classify an attempt that ended before the protocol started.
@@ -896,7 +921,9 @@ impl LinkConnector for BootstrapConnector {
             } else {
                 // A path that cannot be made is the attempt's to report.
                 let control = self.masters.path(&entry).ok()?;
-                if self.masters.check(&entry, &control, None).await == Check::Alive {
+                // Only an absent connection lets the host be held: an unanswered one may be open.
+                let check = self.masters.check(&entry, &control, None).await;
+                if check.may_be_open() {
                     return None;
                 }
                 if !entry.interactive_auth {
@@ -953,6 +980,7 @@ impl BootstrapConnector {
         // say so.
         let repeat = locked(&self.restarts).get(&host).copied();
         let signin = self.prompts.begin_attempt(&host, repeat);
+        learn_when_asked(self.learned.clone(), host.clone(), signin.asking());
         // An ssh host on a Linux or macOS hub has one shared connection: opened here, once,
         // with every prompt of the attempt (the sign-in step); every command after it rides it
         // and can never ask. Anywhere else the one command below does it all.
@@ -1439,6 +1467,10 @@ impl BootstrapConnector {
         }
         // The exit says ssh authenticated; ask the socket whether it is the connection that
         // stayed (ssh goes on without sharing when it cannot listen on the socket).
+        // WHY this branch reports the failure and does not stop the sign-in: when ssh could not
+        // share the connection it went on without one, and under `-N -f` that process stays in
+        // the background with nothing to end it. This is a known rare leak, pending the B11
+        // redesign of the sign-in; until then the diagnostic below is what the user gets.
         if self.masters.check(entry, &control, Some(trail.n())).await != Check::Alive {
             let why = self.masters.signin_failure_text(&control).await;
             return Err(Failure {

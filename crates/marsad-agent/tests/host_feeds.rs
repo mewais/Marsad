@@ -40,8 +40,12 @@ const WASL_TASKS: &str = wasl_proto::topics::TASKS;
 /// reachable.
 struct Daemon {
     refused: Mutex<HashSet<String>>,
+    /// Topics refused as overloaded (a retryable refusal).
+    overloaded: Mutex<HashSet<String>>,
     refusals: Mutex<Vec<String>>,
     refusal_seen: Notify,
+    /// Ends the current `host.sessions` feed with `Ended` (one permit: the next feed to be ended).
+    end_feed: Notify,
     online: AtomicBool,
 }
 
@@ -49,8 +53,10 @@ impl Daemon {
     fn new(refused: &[&str]) -> Arc<Daemon> {
         Arc::new(Daemon {
             refused: Mutex::new(refused.iter().map(|t| t.to_string()).collect()),
+            overloaded: Mutex::new(HashSet::new()),
             refusals: Mutex::new(Vec::new()),
             refusal_seen: Notify::new(),
+            end_feed: Notify::new(),
             online: AtomicBool::new(true),
         })
     }
@@ -93,6 +99,11 @@ impl Service for Served {
         _params: Value,
         from: Option<Cursor>,
     ) -> Result<EventStream, RpcError> {
+        if self.0.overloaded.lock().unwrap().contains(topic) {
+            self.0.refusals.lock().unwrap().push(topic.to_string());
+            self.0.refusal_seen.notify_waiters();
+            return Err(RpcError::new(wasit_control::codes::OVERLOADED, "busy"));
+        }
         if self.0.refused.lock().unwrap().contains(topic) {
             self.0.refusals.lock().unwrap().push(topic.to_string());
             self.0.refusal_seen.notify_waiters();
@@ -109,7 +120,13 @@ impl Service for Served {
                 .expect("a host event");
                 first.push(Ok((Cursor::new("1"), snapshot)));
             }
-            return Ok(stream::iter(first).chain(stream::pending()).boxed());
+            // Then nothing, until the test ends the feed (the service's own verdict, link up).
+            let daemon = self.0.clone();
+            let ended = stream::once(async move {
+                daemon.end_feed.notified().await;
+                Err::<(Cursor, Value), _>(CloseReason::Ended)
+            });
+            return Ok(stream::iter(first).chain(ended).boxed());
         }
         if [
             WASL_TASKS,
@@ -488,4 +505,84 @@ async fn a_workstream_feed_refused_for_good_is_subscribed_again_on_reconnect() {
     counting
         .until(|_| counting.count(&wasl) > refused_attempts)
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retryable_refusal_is_a_feed_error_and_does_not_drop_the_link() {
+    let daemon = Daemon::new(&[]);
+    daemon
+        .overloaded
+        .lock()
+        .unwrap()
+        .insert(rt_topics::HOST_SESSIONS.to_string());
+    let rig = Rig::start(daemon).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
+    rig.settle(
+        |h| h.feed_error.is_some(),
+        |e| feed_error_event(e).is_some_and(|e| e.is_some()),
+    )
+    .await;
+    let text = rig.host().await.feed_error.expect("the refusal is shown");
+    assert!(text.starts_with("overloaded"), "{text}");
+
+    // The refusal does not drop the link: no link-down event follows it (a window in which the
+    // link would be dropped and reported; the link itself is the only thing that drops it).
+    let dropped = tokio::time::timeout(
+        Duration::from_secs(1),
+        rig.settle(|h| !link_up(h), |e| link_event(e, false)),
+    )
+    .await;
+    assert!(
+        dropped.is_err(),
+        "the link was dropped on account of the refusal"
+    );
+    assert!(link_up(&rig.host().await), "the link is still up");
+
+    // The host accepts the feed now; the next link event brings it back with a snapshot.
+    rig.daemon.overloaded.lock().unwrap().clear();
+    rig.drop_link();
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
+    rig.settle(
+        |h| h.feed_error.is_none(),
+        |e| feed_error_event(e) == Some(None),
+    )
+    .await;
+    assert!(
+        rig.host().await.sessions_live,
+        "the snapshot made the host live"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_feed_that_ends_while_the_link_is_up_is_a_feed_error_and_recovers_on_reconnect() {
+    let rig = Rig::start(Daemon::new(&[])).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
+    rig.settle(|h| h.sessions_live, sessions_event).await;
+
+    // The host ends its feed; the link stays up.
+    rig.daemon.end_feed.notify_one();
+    rig.settle(
+        |h| h.feed_error.is_some(),
+        |e| feed_error_event(e).is_some_and(|e| e.is_some()),
+    )
+    .await;
+    let host = rig.host().await;
+    let text = host.feed_error.clone().expect("the end is shown");
+    assert!(text.starts_with("ended"), "{text}");
+    assert!(!host.sessions_live, "the sessions are no longer live");
+    assert!(link_up(&host), "the link stayed up");
+
+    // The next link connection starts the feed again, with a snapshot.
+    rig.drop_link();
+    rig.settle(|h| !link_up(h), |e| link_event(e, false)).await;
+    rig.settle(link_up, |e| link_event(e, true)).await;
+    rig.settle(
+        |h| h.feed_error.is_none(),
+        |e| feed_error_event(e) == Some(None),
+    )
+    .await;
+    let host = rig.host().await;
+    assert!(host.sessions_live, "the snapshot made the host live");
+    assert_eq!(host.feed_error, None);
 }

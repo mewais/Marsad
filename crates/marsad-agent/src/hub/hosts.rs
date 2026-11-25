@@ -323,6 +323,9 @@ impl Registry {
         self.inner.store.put_host(entry.clone()).await?;
         if entry.kind != old.kind {
             self.unlink(&entry.id).await;
+            // The old machine's sessions, git rows and feed error go with its route: the host is
+            // removed from the fleet, then added again by the new route's link.
+            self.inner.fleet.host_removed(entry.id.clone()).await;
             self.inner.prompts.forget(&entry.id);
             // The old route's shared connection ends (the new route has its own socket and
             // signs in on its own).
@@ -377,28 +380,34 @@ impl Registry {
     /// Connect now. For a host that needs the user at login this is the user's explicit
     /// "Connect": it allows the next attempt (the click is spent when that attempt asks them
     /// something or connects, see [`Prompts`]), which then asks.
-    pub fn reconnect(&self, id: &HostId) -> Result<(), MarsadError> {
+    ///
+    /// Asking to connect after a sign-out clears the stored flag: written under the edits lock
+    /// (so no concurrent edit is lost) and awaited, and the fleet is told of it.
+    pub async fn reconnect(&self, id: &HostId) -> Result<(), MarsadError> {
+        let _edit = self.inner.edits.lock().await;
         if self.inner.hub.link(id).is_none() {
             return Err(MarsadError::NotFound {
                 what: format!("link to {id}"),
             });
         }
-        // Asking to connect is asking to sign in again, after a sign-out too.
-        self.inner.masters.set_signed_out(id, false);
         if let Some(mut entry) = self.get(id) {
             if entry.signed_out {
                 entry.signed_out = false;
+                self.inner.store.put_host(entry.clone()).await?;
                 self.inner
                     .entries
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(entry.id.clone(), entry.clone());
-                let store = self.inner.store.clone();
-                tokio::spawn(async move {
-                    let _ = store.put_host(entry).await;
-                });
+                let state = self.link_state(id);
+                self.inner
+                    .fleet
+                    .host_upserted(entry, FleetLink::Remote { state })
+                    .await;
             }
         }
+        // Asking to connect is asking to sign in again, after a sign-out too.
+        self.inner.masters.set_signed_out(id, false);
         self.inner.prompts.arm(id);
         if self.inner.hub.reconnect_now(id) {
             Ok(())
@@ -412,10 +421,13 @@ impl Registry {
     }
 
     /// Ends the shared ssh connection of `entry` (if it has one) and forgets what was known of
-    /// it. Every outcome is on record ([`Masters::exit`]).
+    /// it, unless the end failed: then the connection is still open and stays tracked. Every
+    /// outcome is on record ([`Masters::exit`]).
     async fn end_shared(&self, entry: &HostEntry, why: MasterExitWhy) {
-        if Masters::applies(entry) {
-            self.inner.masters.exit(entry, why).await;
+        if Masters::applies(entry)
+            && self.inner.masters.exit(entry, why).await == MasterExitOutcome::Failed
+        {
+            return;
         }
         self.inner.masters.forget(&entry.id);
     }
@@ -424,8 +436,15 @@ impl Registry {
     /// host waits for the user to sign in again (`hosts.reconnect`); nothing reconnects it on
     /// its own, a host with a key included. A link that did not ride the connection is dropped
     /// too.
+    ///
+    /// The sign-out is stored (under the edits lock, so a concurrent edit is not overwritten)
+    /// before the connection is ended, and the lock is held until it has ended: a reconnect
+    /// cannot slip in between and have its new connection ended. If ssh cannot end the
+    /// connection, the sign-out still stands (the link is dropped and waits for the user), but
+    /// the call fails and the connection stays tracked: it is still open.
     pub async fn signout(&self, id: &HostId) -> Result<(), MarsadError> {
-        let entry = self.get(id).ok_or_else(|| MarsadError::NotFound {
+        let _edit = self.inner.edits.lock().await;
+        let mut entry = self.get(id).ok_or_else(|| MarsadError::NotFound {
             what: format!("host {id}"),
         })?;
         if !Masters::applies(&entry) {
@@ -442,7 +461,6 @@ impl Registry {
         // or click of the host is void.
         self.inner.prompts.forget(id);
         self.inner.masters.mark_signed_out(id);
-        let mut entry = entry;
         entry.signed_out = true;
         self.inner.store.put_host(entry.clone()).await?;
         self.inner
@@ -457,22 +475,33 @@ impl Registry {
             .await;
         // The link that rode the connection drops by itself, and the supervisor then asks
         // whether the host must wait: it must. One that did not ride a connection (there was
-        // none to end) is dropped here, to the same question.
+        // none to end, or it could not be ended) is dropped here, to the same question.
         if ended != MasterExitOutcome::Ended {
             self.inner.hub.reconnect_now(id);
         }
         // Record the flag with the fleet state that follows from the supervisor.
-        let state = self
-            .inner
-            .hub
-            .link(&entry.id)
-            .map(|s| s.current_state())
-            .unwrap_or(LinkState::Connecting);
+        let state = self.link_state(id);
         self.inner
             .fleet
             .host_upserted(entry, FleetLink::Remote { state })
             .await;
-        Ok(())
+        match ended {
+            MasterExitOutcome::Failed => Err(MarsadError::Io {
+                message: format!(
+                    "signed out of {id}, but its shared ssh connection could not be ended: it may still be open"
+                ),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// The state of `id`'s link as the fleet shows it.
+    fn link_state(&self, id: &HostId) -> LinkState {
+        self.inner
+            .hub
+            .link(id)
+            .map(|s| s.current_state())
+            .unwrap_or(LinkState::Connecting)
     }
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
@@ -594,4 +623,227 @@ async fn check_wsl_distro(distro: &str) -> Result<(), MarsadError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use marsad_proto::fleet::FleetHost;
+    use wasit_control::{Attempt, ClientOptions, ConnectError, ControlClient, Hello, HubConfig};
+
+    use super::*;
+
+    /// Links that never connect: the tests act on the registry, not on a host.
+    struct Parked;
+
+    #[async_trait]
+    impl wasit_control::LinkConnector for Parked {
+        async fn connect(
+            &self,
+            _spec: &HostSpec,
+            _opts: ClientOptions,
+            _attempt: Attempt,
+        ) -> Result<ControlClient, ConnectError> {
+            std::future::pending().await
+        }
+
+        async fn hold(&self, _spec: &HostSpec) -> Option<String> {
+            Some("test: links are parked".into())
+        }
+    }
+
+    struct Harness {
+        registry: Registry,
+        masters: Masters,
+        fleet: Fleet,
+        store: Store,
+        dir: std::path::PathBuf,
+    }
+
+    async fn harness(name: &str) -> Harness {
+        let dir = std::env::temp_dir().join(format!("mrs-hosts-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir.join("store")).await.unwrap();
+        let fleet = Fleet::spawn();
+        let prompts = Prompts::new(fleet.clone(), Duration::from_secs(5));
+        let masters = Masters::new(dir.join("ssh"));
+        masters.prepare().await.unwrap();
+        let hub = Hub::new(
+            HubConfig::new(Hello::new("test", "hub", "hub")),
+            Arc::new(Parked),
+            None,
+        );
+        let local = HostEntry {
+            id: HostId::new("local"),
+            name: "local".into(),
+            kind: HostKind::Local,
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        };
+        let (_learned_tx, learned_rx) = mpsc::channel(8);
+        let registry = Registry::start(
+            RegistryParts {
+                store: store.clone(),
+                hub,
+                fleet: fleet.clone(),
+                entries: Arc::new(std::sync::RwLock::new(HashMap::new())),
+                local,
+                prompts,
+                masters: masters.clone(),
+            },
+            learned_rx,
+        )
+        .await
+        .unwrap();
+        Harness {
+            registry,
+            masters,
+            fleet,
+            store,
+            dir,
+        }
+    }
+
+    async fn add_ssh(h: &Harness, id: &str) -> HostId {
+        let entry = h
+            .registry
+            .add(HostDraft {
+                name: id.into(),
+                kind: HostKind::Ssh {
+                    target: "u@127.0.0.1".into(),
+                    port: None,
+                    identity_file: None,
+                    options: Vec::new(),
+                },
+                id: Some(HostId::new(id)),
+            })
+            .await
+            .unwrap();
+        entry.id
+    }
+
+    /// A control socket that accepts and drops every connection: `ssh -O exit` on it fails
+    /// (the master answers nothing), so the connection is still open as far as the hub knows.
+    fn wedged_master(h: &Harness, id: &HostId) -> tokio::task::JoinHandle<()> {
+        let entry = h.registry.get(id).unwrap();
+        let control = h.masters.path(&entry).unwrap();
+        let listener = tokio::net::UnixListener::bind(&control).expect("bind the test socket");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        })
+    }
+
+    /// A sign-in that ended with the connection open: the master is tracked, as a real one is.
+    async fn signed_in_master(h: &Harness, id: &HostId) {
+        let entry = h.registry.get(id).unwrap();
+        let control = h.masters.path(&entry).unwrap();
+        let started = h.masters.begin_signin(&entry, &control).await;
+        assert!(h.masters.signed_in(id, started));
+    }
+
+    async fn fleet_host(fleet: &Fleet, id: &HostId) -> FleetHost {
+        fleet
+            .snapshot()
+            .await
+            .into_iter()
+            .find(|h| h.host.id == *id)
+            .expect("the fleet knows the host")
+    }
+
+    async fn stored_host(store: &Store, id: &HostId) -> HostEntry {
+        store
+            .hosts()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id == *id)
+            .expect("the store has the host")
+    }
+
+    #[tokio::test]
+    async fn a_signout_whose_exit_failed_says_so_and_keeps_the_master_tracked() {
+        let h = harness("signout-failed").await;
+        let id = add_ssh(&h, "box").await;
+        signed_in_master(&h, &id).await;
+        let listener = wedged_master(&h, &id);
+
+        let err = h
+            .registry
+            .signout(&id)
+            .await
+            .expect_err("a connection that could not be ended is not a sign-out");
+        listener.abort();
+        assert!(
+            err.to_string().contains("could not be ended"),
+            "the failure is reported: {err}"
+        );
+        assert!(
+            h.masters.tracked(&id),
+            "the connection is still open, so it stays tracked"
+        );
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[tokio::test]
+    async fn removing_a_host_whose_exit_failed_keeps_its_master_tracked() {
+        let h = harness("remove-failed").await;
+        let id = add_ssh(&h, "box").await;
+        signed_in_master(&h, &id).await;
+        let listener = wedged_master(&h, &id);
+
+        h.registry.remove(&id).await.unwrap();
+        listener.abort();
+        assert!(
+            h.masters.tracked(&id),
+            "the connection did not end, so nothing forgets it"
+        );
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[tokio::test]
+    async fn an_edit_and_a_signout_at_once_keep_both_changes() {
+        let h = harness("edit-signout").await;
+        let id = add_ssh(&h, "box").await;
+        let mut edited = h.registry.get(&id).unwrap();
+        edited.name = "renamed".into();
+
+        // Both run concurrently: the edit must not be overwritten by the sign-out's copy of the
+        // entry, nor the sign-out by the edit's.
+        let (updated, signed_out) =
+            tokio::join!(h.registry.update(edited), h.registry.signout(&id));
+        updated.unwrap();
+        signed_out.unwrap();
+
+        let stored = stored_host(&h.store, &id).await;
+        assert_eq!(stored.name, "renamed", "the edit is kept");
+        assert!(stored.signed_out, "the sign-out is kept");
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
+
+    #[tokio::test]
+    async fn the_fleet_and_the_store_see_a_sign_out_and_its_reconnect() {
+        let h = harness("fleet-signed-out").await;
+        let id = add_ssh(&h, "box").await;
+
+        h.registry.signout(&id).await.unwrap();
+        assert!(fleet_host(&h.fleet, &id).await.host.signed_out);
+
+        h.registry.reconnect(&id).await.unwrap();
+        // The write is awaited: the store has the cleared flag when reconnect returns.
+        assert!(!stored_host(&h.store, &id).await.signed_out);
+        assert!(
+            !fleet_host(&h.fleet, &id).await.host.signed_out,
+            "the fleet is told the sign-out is cleared"
+        );
+        let _ = std::fs::remove_dir_all(&h.dir);
+    }
 }
