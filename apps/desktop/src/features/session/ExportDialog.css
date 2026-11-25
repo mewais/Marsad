@@ -5,6 +5,7 @@
 .xp-cap{margin:0}
 .xp-progress{display:flex;align-items:center;gap:8px;font-size:12.5px}
 .xp-files{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
-.xp-files li{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.xp-files li{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.xp-files code{overflow-wrap:anywhere}
 .xp-masked{display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px}
-.xp-note{border:1px solid var(--line);border-radius:var(--r2)}
+.banner.xp-note{border:1px solid var(--line);border-radius:var(--r2);padding:8px 12px}

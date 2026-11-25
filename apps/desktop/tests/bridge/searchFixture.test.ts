@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { methods as M } from "../../src/bridge/wire";
 import type { SearchPage, SearchRequest, SessionEvent } from "../../src/bridge/wire";
-import { searchable } from "../../src/bridge/fixture/search";
+import { searchable, searchFixture } from "../../src/bridge/fixture/search";
 import type { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import type { Spec } from "../../src/bridge/fixture/sessions";
 import { quietBackend } from "../helpers";
@@ -75,8 +75,34 @@ describe("session.search over the fixture's derived log", () => {
     expect(page.hits.every((h) => h.field === "assistant_text")).toBe(true);
   });
 
-  it("an empty query is refused, as the daemon refuses it", async () => {
+  it("an empty query is refused when kinds is omitted or empty", async () => {
     const { b, host, id } = session();
     await expect(search(b, host, req({ session: id, query: "" }))).rejects.toMatchObject({ message: "the query is empty" });
+    await expect(search(b, host, req({ session: id, query: "", kinds: [] }))).rejects.toMatchObject({ message: "kinds names no field" });
+  });
+
+  it("an empty query with non-empty kinds lists every piece of those kinds with start 0, len 0, 80-char clean snippet", async () => {
+    const { b, host, id } = session();
+    const hits: SearchPage["hits"] = [];
+    let page = await search(b, host, req({ session: id, query: "", kinds: ["user_text"], direction: "forward", limit: 50 }));
+    hits.push(...page.hits);
+    while (page.next) {
+      page = await search(b, host, req({ session: id, query: "", kinds: ["user_text"], direction: "forward", limit: 50, resume: page.next }));
+      hits.push(...page.hits);
+    }
+    // 120 completed rounds plus the open working prompt at the end.
+    expect(hits.length).toBe((SPEC.rounds ?? 0) + 1);
+    expect(hits[0].snippet).toBe("Index and summarise module 0 of ledgerline.");
+    expect(hits[hits.length - 1].snippet).toBe("Now re-index module 120 and watch for regressions.");
+    expect(hits.every((h) => h.field === "user_text" && h.start === 0 && h.len === 0)).toBe(true);
+
+    // Control characters become spaces and snippets cap at 80 code points.
+    const longText = `line1\nline2\t${"é".repeat(90)}`;
+    const events = [{ cursor: 7, t: 100, kind: "agent", event: { type: "user_message", text: longText } }] as unknown as SessionEvent[];
+    const res = searchFixture(events, req({ session: id, query: "", kinds: ["user_text"], direction: "forward" }));
+    expect(res.hits).toHaveLength(1);
+    expect(res.hits[0]).toMatchObject({ cursor: 7, field: "user_text", start: 0, len: 0, at: 100 });
+    expect([...res.hits[0].snippet]).toHaveLength(80);
+    expect(res.hits[0].snippet.startsWith("line1 line2 ééé")).toBe(true);
   });
 });

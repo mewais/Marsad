@@ -134,21 +134,22 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
           )}
           {renaming == null ? <IconButton icon="edit" label="Rename session" disabled={!!reach} title={reach ?? "Rename session"} onClick={() => setRenaming(snap.display_name ?? "")} /> : null}
           <StatusPill status={v.status} label={pillLabel} stale={v.stale} />{v.stale ? <span className="lk">last known</span> : null}
-          <span className="flex1" />
-          {cont.kind === "running" ? (
-            <>
-              <Button size="sm" icon="pause" pending={interruptPending} blocked={reach} disabled={!canInterrupt(snap)} title={interruptWords(snap)} onClick={() => void actions.interrupt(key)}>Interrupt</Button>
-              <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => void actions.endSession(key)}>End session</Button>
-              <CompactButton sessionKey={key} snap={snap} blocked={reach} />
-              <ForkButton host={host} sessionKey={key} snap={snap} blocked={reach} />
-            </>
-          ) : (
-            <>
-              <ContinueButton view={v} />
-              <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
-            </>
-          )}
-          <ExportConversation key={key} host={host} session={id} name={v.name} blocked={reach} />
+          <div className="sd-acts">
+            {cont.kind === "running" ? (
+              <>
+                <Button size="sm" icon="pause" pending={interruptPending} blocked={reach} disabled={!canInterrupt(snap)} title={interruptWords(snap)} onClick={() => void actions.interrupt(key)}>Interrupt</Button>
+                <Button size="sm" icon="stop" pending={endPending} blocked={reach} title="Shut the agent down. The session is kept and can be continued." onClick={() => void actions.endSession(key)}>End session</Button>
+                <CompactButton sessionKey={key} snap={snap} blocked={reach} />
+                <ForkButton host={host} sessionKey={key} snap={snap} blocked={reach} />
+              </>
+            ) : (
+              <>
+                <ContinueButton view={v} />
+                <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
+              </>
+            )}
+            <ExportConversation key={key} host={host} session={id} name={v.name} blocked={reach} />
+          </div>
         </div>
         {cont.kind === "blocked" ? <div className="sd-ended" role="status" data-testid="continue-why"><Icon name="stop" size="sm" />{notContinuableWords(cont.why)}</div> : null}
         <div className="sd-meta">

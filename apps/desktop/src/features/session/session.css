@@ -2,7 +2,8 @@
 .sd-head{padding:12px 20px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px;background:var(--win)}
 .crumbs{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-3)}
 .crumbs a{color:var(--fg-2);text-decoration:none;cursor:pointer} .crumbs a:hover{color:var(--fg)}
-.sd-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sd-title{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap}
+.sd-acts{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
 .sd-meta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
 .sd-meta .kv{display:inline-flex;align-items:center;gap:6px}
 .ctx{display:inline-flex;align-items:center;gap:6px}
@@ -20,7 +21,7 @@
 /* Reserve the scrollbar's space so it appearing/disappearing as the list grows never reflows row widths (which would re-measure
    row heights and jitter the virtual list under the reader). */
 .transcript{flex:1;overflow-anchor:none;scrollbar-gutter:stable}
-.tr-item{box-sizing:border-box;max-width:868px;margin:0 auto;padding:0 24px 12px}
+.tr-item{box-sizing:border-box;max-width:888px;margin:0 auto;padding:0 34px 12px}
 .tr-item:empty{padding:0}
 .tr-head{padding-top:16px}
 .tr-tail{padding-bottom:8px}
@@ -37,10 +38,10 @@
 .think{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-3);cursor:pointer;width:max-content}
 .think:hover{color:var(--fg-2)}
 .tool{border:1px solid var(--line);border-radius:var(--r2);background:var(--surface);overflow:hidden}
-.tool-h{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer}
-.tool-h .nm{font-weight:600}
+.tool-h,.tool-h.plainbtn{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer;min-width:0}
+.tool-h .nm{font-weight:600;white-space:nowrap;flex:none}
 .tool-h .arg{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
-.tool-h .res{font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.tool-h .res{font-size:11.5px;color:var(--fg-3);white-space:nowrap;min-width:0;max-width:45%;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
 .tool.run .nm{font-variant-numeric:tabular-nums}
 .run-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px;display:flex;flex-direction:column;gap:8px}
 .msg-user[data-delivery="not_sent"]{border-style:dashed;border-color:var(--failed-line)}
@@ -59,7 +60,7 @@
 .hist-sep::before,.hist-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 .tool-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55}
 .shell-row{border:1px solid var(--line);border-radius:var(--r2);background:var(--surface);overflow:hidden}
-.shell-row .tool-h,.shell-row>button{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer;min-width:0}
+.shell-row .tool-h,.shell-row .tool-h.plainbtn,.shell-row>button{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer;min-width:0}
 .shell-row .tool-h .nm,.shell-row .tool-h .arg,.shell-row .tool-h>code{font-family:var(--f-mono);font-size:11.5px;font-weight:500;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
 .shell-row .tool-h code{font-family:inherit;font-size:inherit}
 .shell-row-cwd{font-size:11.5px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
@@ -69,12 +70,16 @@
 .shell-row .tool-h .res.c-needs,.shell-row [data-testid="shell-exit"].c-needs{color:var(--needs);background:var(--needs-bg);border-color:var(--needs-line)}
 .shell-row .tool-b,.shell-row [data-testid="shell-output"]{margin:0;border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55;max-height:260px}
 .shell-truncated{padding:5px 10px;border-top:1px solid var(--line);background:var(--sunken);font-size:11px;color:var(--fg-3)}
+.diff-part{border-top:1px solid var(--line)}
+.diff-part>.hunk{font-family:var(--f-mono);font-size:11.5px;line-height:1.5;color:var(--fg-2);padding:4px 10px;background:var(--surface-2);border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .diff{font-family:var(--f-mono);font-size:11.5px;line-height:1.6;background:var(--sunken);overflow:auto}
-.diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre}
+.diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre;min-width:100%;width:max-content}
 .diff .ln>span:nth-child(-n+2){color:var(--fg-3);text-align:right;padding-right:8px;user-select:none}
 .diff .ln.a{background:var(--add-bg)} .diff .ln.a span:nth-child(3){color:var(--add)}
 .diff .ln.d{background:var(--del-bg)} .diff .ln.d span:nth-child(3){color:var(--del)}
-.diff .hunk{color:var(--fg-3);padding:2px 10px;background:var(--surface-2);white-space:pre}
+.diff .hunk{color:var(--fg-3);padding:2px 10px;background:var(--surface-2);white-space:pre;min-width:100%;width:max-content}
+.tool .diff .ln{grid-template-columns:0 0 18px 1fr;padding:0 10px 0 8px}
+.tool .diff .ln>span:nth-child(-n+2){padding-right:0}
 .subag{border:1px solid var(--line);border-left:3px solid var(--d-oc);border-radius:var(--r2);background:var(--surface);padding:8px 12px;display:flex;flex-direction:column;gap:6px}
 .subag-h{display:flex;align-items:center;gap:8px;font-size:12px}
 .subag ul{margin:0;padding-left:18px;font-size:12px;color:var(--fg-2)}
@@ -108,7 +113,9 @@
 .jump{display:flex;flex-direction:column;gap:6px}
 .jump a{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:var(--r2);border:1px solid var(--needs-line);background:var(--needs-bg);font-size:12px;color:var(--fg);text-decoration:none;cursor:pointer}
 .sd-title input.rename{background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--fg);min-width:320px}
-.sd-stale{margin:0 -20px;padding-block:6px}
+.sd-stale,.sd-forked{margin:0 -20px;padding-block:6px}
+.sd-forked a{color:inherit;font-weight:500;text-decoration:underline;text-underline-offset:2px}
+.sd-forked a:hover{color:var(--fg)}
 .sd-ended{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2)}
 
 .own{display:flex;flex-direction:column;gap:6px;font-size:12px}

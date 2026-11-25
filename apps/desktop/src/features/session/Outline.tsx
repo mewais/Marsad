@@ -63,8 +63,8 @@ export function Outline({ host, id, scope, parts, onJump, onClose }: {
       </div>
       {state.error ? <div className="c-failed tr-outline-error" role="alert">{state.error}</div> : null}
       <ol className="tr-outline-list">
-        {state.hits.map((h) => (
-          <li key={`${h.part}:${h.cursor}`}>
+        {state.hits.map((h, i) => (
+          <li key={`${h.part}:${h.cursor}:${i}`}>
             <button type="button" className="tr-outline-item" onClick={() => onJump(h)}>
               <time className="tr-outline-time">{clockTime(h.at)}</time>
               <span className="tr-outline-text">{h.snippet.slice(0, SHOWN)}</span>
@@ -72,7 +72,8 @@ export function Outline({ host, id, scope, parts, onJump, onClose }: {
           </li>
         ))}
       </ol>
-      {!state.done && !state.error ? <div className="faint fs12 tr-outline-foot">Loading prompts…</div> : null}
+      {!state.done && !state.error ? <div className="faint fs12 tr-outline-foot">Loading prompts…</div>
+        : state.done && !state.error && state.hits.length === 0 ? <div className="faint fs12 tr-outline-foot">No prompts yet</div> : null}
     </aside>
   );
 }

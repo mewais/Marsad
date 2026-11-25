@@ -1,7 +1,6 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { methods as M } from "../../src/bridge/wire";
 import type { Spec } from "../../src/bridge/fixture/sessions";
 import { quietBackend, renderApp, sessionByName } from "../helpers";
 import { holdHistory, type HistoryGate } from "../historyGate";
@@ -74,20 +73,7 @@ describe("Collapse all / Expand all", () => {
 describe("Outline: the prompts of the conversation, each jumps to its prompt", () => {
   it("lists prompts with their time and text, and a click on one that is not loaded pages back to it", async () => {
     const user = userEvent.setup();
-    // The fixture refuses an empty query, and the outline asks for every prompt with one: this stands in for that listing by
-    // searching the words every prompt of the session has. The outline is otherwise the daemon's answer.
-    const b0 = quietBackend({ specs: [LONG] });
-    const request = b0.request.bind(b0);
-    b0.request = ((m: string, p?: unknown, o?: object) => {
-      const r = p as { query?: string } | undefined;
-      if (m === M.SESSION_SEARCH && r?.query === "") return request(m, { ...r, query: "Index and summarise" }, o);
-      return request(m, p, o);
-    }) as typeof b0.request;
-    const gate = holdHistory(b0, 2);
-    const s = sessionByName(b0, LONG.name);
-    await renderApp(`/session/${s.host}/${s.id}`, b0);
-    await screen.findByRole("heading", { name: LONG.name });
-    await waitFor(() => expect(transcript()).not.toBeNull());
+    const { gate } = await open(LONG, 2);
 
     await user.click(screen.getByRole("button", { name: "Outline" }));
     const outline = await screen.findByRole("complementary", { name: "Outline" });
@@ -96,8 +82,8 @@ describe("Outline: the prompts of the conversation, each jumps to its prompt", (
     expect(inTranscript(300)).toBe(false);
     await user.click(item);
     for (let i = 0; i < 30 && !inTranscript(300); i++) {
-      await waitFor(() => expect(gate.pending().length).toBeGreaterThan(0));
-      await act(async () => gate.release());
+      await waitFor(() => expect(gate!.pending().length).toBeGreaterThan(0));
+      await act(async () => gate!.release());
     }
     expect(inTranscript(300)).toBe(true);
   });

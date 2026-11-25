@@ -104,20 +104,26 @@ export function findAll(text: string, query: string): { start: number; end: numb
   return spans;
 }
 
+/** Replace control characters with spaces (one for one). */
+const clean = (chars: string[]) => chars.map((c) => (/\p{Cc}/u.test(c) ? " " : c)).join("");
+
 /** The text around one match: `RADIUS` characters each side, control characters shown as spaces (one for one). */
 function snippetOf(chars: string[], span: { start: number; end: number }): { text: string; start: number; end: number } {
   const from = Math.max(0, span.start - RADIUS);
   const to = Math.min(chars.length, span.end + RADIUS);
-  const text = chars.slice(from, to).map((c) => (/\p{Cc}/u.test(c) ? " " : c)).join("");
-  return { text, start: span.start - from, end: span.end - from };
+  return { text: clean(chars.slice(from, to)), start: span.start - from, end: span.end - from };
 }
 
-/** The hits of one event, in the order of its pieces; an event outside the scope has none. */
+/** The hits of one event, in the order of its pieces; an empty query (with `kinds`) lists every matching piece once. */
 function hitsIn(e: SessionEvent, query: string, kinds: readonly string[] | undefined, part: SearchHit["part"]): SearchHit[] {
   const out: SearchHit[] = [];
   for (const [field, text] of searchable(e)) {
     if (kinds && !kinds.includes(field)) continue;
     const chars = [...text];
+    if (!query) {
+      out.push({ cursor: e.cursor, part, field, snippet: clean(chars.slice(0, RADIUS * 2)), start: 0, len: 0, at: e.t });
+      continue;
+    }
     for (const span of findAll(text, query)) {
       const s = snippetOf(chars, span);
       out.push({ cursor: e.cursor, part, field, snippet: s.text, start: s.start, len: s.end - s.start, at: e.t });
@@ -132,8 +138,8 @@ function hitsIn(e: SessionEvent, query: string, kinds: readonly string[] | undef
  * examined again, its first `skip` hits already returned.
  */
 export function searchFixture(events: readonly SessionEvent[], r: SearchRequest): SearchPage {
-  if (!r.query) throw err("invalid_params", "the query is empty", { marsad_error: "invalid_request", message: "the query is empty" });
   if (r.kinds && r.kinds.length === 0) throw err("invalid_params", "kinds names no field", { marsad_error: "invalid_request", message: "kinds names no field" });
+  if (!r.query && !r.kinds) throw err("invalid_params", "the query is empty", { marsad_error: "invalid_request", message: "the query is empty" });
   if (r.resume && r.anchor != null) throw err("invalid_params", "give either an anchor or a resume token, not both", { marsad_error: "invalid_request", message: "give either an anchor or a resume token, not both" });
   const token = r.resume ? parseToken(r.resume) : null;
   const limit = Math.min(MAX_HITS, Math.max(1, r.limit));

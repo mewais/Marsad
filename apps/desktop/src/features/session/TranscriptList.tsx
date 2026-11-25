@@ -170,18 +170,7 @@ export function TranscriptList({ sessionKey, host, id, scope, driver, followKey,
   const renderEntry = (e: TranscriptEntry) => {
     switch (e.kind) {
       case "head":
-        if (detached) {
-          return (
-            <div className="tr-item tr-head">
-              <div className="tr-band" role="status">
-                <span>Viewing older part</span>
-                <span aria-hidden="true"> · </span>
-                <Button size="sm" variant="ghost" onClick={jumps.backToLatest}>Back to latest</Button>
-                {detached.error ? <span className="c-failed"> {detached.error}</span> : null}
-              </div>
-            </div>
-          );
-        }
+        if (detached) return <div className="tr-item tr-head" />;
         return (
           <div className="tr-item tr-head">
             {canLoad ? <Button size="sm" variant="ghost" pending={!!slice?.loading || !!slice?.earlier.loading} onClick={loadEarlier}>Load earlier messages</Button> : null}
@@ -233,6 +222,14 @@ export function TranscriptList({ sessionKey, host, id, scope, driver, followKey,
               onStep={stepFind}
               onClose={closeFind}
             />
+          ) : null}
+          {detached ? (
+            <div className="tr-band" role="status">
+              <span>Viewing older part</span>
+              <span aria-hidden="true"> · </span>
+              <Button size="sm" variant="ghost" onClick={jumps.backToLatest}>Back to latest</Button>
+              {detached.error ? <span className="c-failed"> {detached.error}</span> : null}
+            </div>
           ) : null}
           <div className="tr-stage">
             <VirtualList<TranscriptEntry>

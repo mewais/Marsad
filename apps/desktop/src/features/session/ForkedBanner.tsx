@@ -16,7 +16,7 @@ export function ForkedBanner({ host, snap }: { host: string; snap: SessionSnapsh
 function ForkedFromLine({ host, parentId }: { host: string; parentId: string }) {
   const parent = useSessionView(`${host}/${parentId}`);
   return (
-    <div className="banner" role="status" data-testid="forked-from">
+    <div className="banner info sd-forked" role="status" data-testid="forked-from">
       <Icon name="branch" size="sm" />
       <div className="bt">
         <span>Forked from <b>{parent?.name ?? parentId}</b></span> · <Link to={sessionPath(host, parentId)}>open</Link>
