@@ -36,8 +36,9 @@ use marsad_proto::diag::{HostsOp, MarsadEvent, MasterExitOutcome, MasterExitWhy,
 use marsad_proto::hosts::{HostEntry, HostKind};
 use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use wasit_control::{CommandSpec, CommandTransport, CLOSED_EXIT_WAIT};
-use wasit_diag::Ident;
+use tokio::sync::{oneshot, watch, Notify};
+use wasit_control::{CommandSpec, CommandTransport, ExitInfo, CLOSED_EXIT_WAIT};
+use wasit_diag::{Code, Ident};
 
 use super::transport::{
     control_path_fits, control_socket, master_command_argv, master_log, socket_path_limit,
@@ -89,6 +90,8 @@ struct HostMaster {
     /// A counter bumped at every sign-out: a sign-in that began under an older generation ends
     /// its own master instead of keeping it.
     generation: u64,
+    /// Woken at every sign-out, so that a sign-in waiting for its connection hears of it at once.
+    signed_out_signal: Arc<Notify>,
 }
 
 struct Inner {
@@ -237,6 +240,7 @@ impl Masters {
             h.signed_out = true;
             h.generation = h.generation.wrapping_add(1);
             h.alive = false;
+            h.signed_out_signal.notify_waiters();
         });
     }
 
@@ -295,6 +299,77 @@ impl Masters {
         let text = read_tail(&log, 16 * 1024).await.unwrap_or_default();
         let _ = tokio::fs::remove_file(&log).await;
         text
+    }
+
+    /// The sign-in step of `entry`'s connection, whose socket is `control`, begun at
+    /// `generation` ([`Masters::begin_signin`]). Runs `cmd`, ssh authenticating and leaving the
+    /// connection in the background, and returns once ssh ended and the connection answered one
+    /// `-O check`, or when the user signed out meanwhile.
+    ///
+    /// Exit status 0 means ssh has detached and bound the control socket already (OpenSSH binds
+    /// it before forking the master); success is that exit AND a check that answers `Alive`.
+    /// A non-zero exit ends the step as a failure. If ssh never detaches (it could not bind the
+    /// socket and runs as a plain `-N` session) this waits without a timer until it ends or the
+    /// attempt is cancelled. A dropped [`SignInChild`] kills the command, so a cancelled attempt
+    /// leaves nothing running.
+    pub async fn sign_in(
+        &self,
+        entry: &HostEntry,
+        control: &Path,
+        generation: u64,
+        cmd: SignInCommand,
+    ) -> SignInStep {
+        let host = &entry.id;
+        let mut child = match SignInChild::spawn(&cmd, Ident::new(host.as_str())) {
+            Ok(c) => c,
+            Err(e) => {
+                let program = cmd.argv.first().map_or("", String::as_str);
+                return SignInStep::Unstarted(format!("{program}: {e}"));
+            }
+        };
+        let signal = self.signed_out_signal(host);
+        // Taken before the generation is read, so that a sign-out between the two is not missed.
+        let signed_out = signal.notified();
+        if self.generation_of(host) != generation {
+            child.kill();
+            let _ = child.ended().await;
+            self.exit(entry, MasterExitWhy::SignedOut).await;
+            return SignInStep::SignedOut;
+        }
+        let exit = tokio::select! {
+            exit = child.ended() => exit,
+            _ = signed_out => {
+                child.kill();
+                let _ = child.ended().await;
+                self.exit(entry, MasterExitWhy::SignedOut).await;
+                return SignInStep::SignedOut;
+            }
+        };
+        if self.generation_of(host) != generation {
+            self.exit(entry, MasterExitWhy::SignedOut).await;
+            return SignInStep::SignedOut;
+        }
+        if exit.code != Some(0) {
+            return SignInStep::Ended {
+                exit,
+                stderr: child.stderr(),
+            };
+        }
+        match self.check(entry, control, Some(cmd.attempt)).await {
+            Check::Alive => {
+                child.keep();
+                SignInStep::Open
+            }
+            _ => SignInStep::NoConnection { code: exit.code },
+        }
+    }
+
+    fn generation_of(&self, host: &HostId) -> u64 {
+        self.with(host, |h| h.generation)
+    }
+
+    fn signed_out_signal(&self, host: &HostId) -> Arc<Notify> {
+        self.with(host, |h| h.signed_out_signal.clone())
     }
 
     /// Looks for the connection of `entry` (`ssh -O check`: it only talks to the local
@@ -485,6 +560,251 @@ impl Masters {
             remove_file(&entry.id, &master_log(&control)).await;
         }
         outcome
+    }
+}
+
+/// The sign-in command of a connection (see [`Masters::sign_in`]).
+pub struct SignInCommand {
+    /// The program and its arguments (the program first).
+    pub argv: Vec<String>,
+    /// Its environment, on top of the hub's base environment.
+    pub env: Vec<(String, String)>,
+    /// The diagnostics label of the link attempt the command serves.
+    pub link: Ident,
+    /// The attempt's number, which its records carry.
+    pub attempt: u64,
+}
+
+/// How a sign-in step ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignInStep {
+    /// The connection is open and was found so by one check. The command is left to end by
+    /// itself (ssh detaches at once).
+    Open,
+    /// The command ended on its own, not with status 0, before the connection was found open:
+    /// its exit (a status, or a signal) and what it wrote on its stderr (ssh says some things
+    /// there, such as an unreadable identity file, before `-E` takes its messages).
+    Ended { exit: ExitInfo, stderr: String },
+    /// No connection was found open even though ssh ended with status 0 (`code` is that status).
+    NoConnection { code: Option<i32> },
+    /// The user signed out while the sign-in was under way: the command is killed and whatever
+    /// it opened is ended.
+    SignedOut,
+    /// The command could not be started (the text says why).
+    Unstarted(String),
+}
+
+/// The sign-in command as this hub's child: in its own session (so no group kill of the hub's
+/// reaches it), with null stdin and stdout, its stderr kept, and reaped by a task of its own. Dropped without
+/// [`SignInChild::keep`] it is killed, so every way out of a sign-in that did not open the
+/// connection leaves nothing running.
+struct SignInChild {
+    exit: watch::Receiver<Option<ExitInfo>>,
+    /// What the child wrote on its stderr, read once it exited.
+    stderr: Arc<Mutex<String>>,
+    /// Asks the reaping task to kill the child; `None` once kept, or killed.
+    kill: Option<oneshot::Sender<()>>,
+}
+
+impl SignInChild {
+    fn spawn(cmd: &SignInCommand, host: Ident) -> std::io::Result<SignInChild> {
+        let (program, args) = cmd
+            .argv
+            .split_first()
+            .ok_or_else(|| std::io::Error::other("empty command"))?;
+        let mut command = wasit_process::command(program);
+        command
+            .args(args)
+            .envs(cmd.env.iter().map(|(k, v)| (k, v)))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(false);
+        #[cfg(unix)]
+        wasit_process::new_session(&mut command);
+        let mut child = command.spawn()?;
+        let name = std::path::Path::new(program)
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        wasit_diag::emit(&SignInEvent::Spawned {
+            link: cmd.link.clone(),
+            host: Some(host.clone()),
+            n: cmd.attempt,
+            program: Code::new(&name),
+            argc: u32::try_from(cmd.argv.len()).unwrap_or(u32::MAX),
+            pid: child.id(),
+        });
+        let (exit_tx, exit_rx) = watch::channel(None);
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        let (link, attempt) = (cmd.link.clone(), cmd.attempt);
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let said = stderr.clone();
+        let mut pipe = child.stderr.take();
+        tokio::spawn(async move {
+            let mut kill = Some(kill_rx);
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 1024];
+            // The stderr is read while the child runs, so that it never fills the pipe.
+            let status = loop {
+                tokio::select! {
+                    s = child.wait() => break s,
+                    k = async { kill.as_mut().expect("enabled while some").await },
+                        if kill.is_some() =>
+                    {
+                        kill = None;
+                        // An error is a dropped sender: the child was kept, nothing to kill.
+                        if k.is_ok() {
+                            let _ = child.start_kill();
+                            break child.wait().await;
+                        }
+                    }
+                    n = async { pipe.as_mut().expect("enabled while some").read(&mut buf).await },
+                        if pipe.is_some() =>
+                    {
+                        match n {
+                            Ok(n) if n > 0 => bytes.extend_from_slice(&buf[..n]),
+                            _ => pipe = None,
+                        }
+                    }
+                }
+            };
+            if let Some(pipe) = pipe.as_ref() {
+                read_what_is_left(pipe, &mut bytes);
+            }
+            *said.lock().unwrap_or_else(|p| p.into_inner()) =
+                String::from_utf8_lossy(&bytes).trim_end().to_owned();
+            let info = match status {
+                Ok(st) => ExitInfo {
+                    code: st.code(),
+                    signal: exit_signal(&st),
+                },
+                Err(_) => ExitInfo {
+                    code: None,
+                    signal: None,
+                },
+            };
+            wasit_diag::emit(&SignInEvent::Exited {
+                link,
+                host: Some(host),
+                n: attempt,
+                code: info.code,
+                signal: info.signal,
+            });
+            // Receivers may all be gone: nothing waits for the exit any more.
+            let _ = exit_tx.send(Some(info));
+        });
+        Ok(SignInChild {
+            exit: exit_rx,
+            stderr,
+            kill: Some(kill_tx),
+        })
+    }
+
+    /// Resolves with the exit of the child (a failed reap reads as no status).
+    async fn ended(&self) -> ExitInfo {
+        let mut rx = self.exit.clone();
+        let info = match rx.wait_for(Option::is_some).await {
+            Ok(v) => *v,
+            Err(_) => None,
+        };
+        info.unwrap_or(ExitInfo {
+            code: None,
+            signal: None,
+        })
+    }
+
+    /// What the child wrote on its stderr (complete once [`SignInChild::ended`] resolved).
+    fn stderr(&self) -> String {
+        self.stderr
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Kills the child (SIGKILL). It is reaped by its task, which is what ends it.
+    fn kill(&mut self) {
+        if let Some(k) = self.kill.take() {
+            let _ = k.send(());
+        }
+    }
+
+    /// The connection is open: the child is no longer ours to end.
+    fn keep(mut self) {
+        self.kill = None;
+    }
+}
+
+impl Drop for SignInChild {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Appends to `bytes` what an exited child left in its stderr `pipe`, without waiting for the
+/// pipe's end.
+///
+/// WHY not read to end of file: processes ssh starts (a `ProxyCommand`, the master it leaves
+/// in the background) can inherit the pipe and hold it open for as long as they live. The child
+/// wrote everything before it exited, so what is in the pipe now is all of it. WHY read the
+/// descriptor directly: the runtime may learn of the exit before it learns that the pipe became
+/// readable, and its reads trust what it learned; a read of the (non-blocking) descriptor
+/// itself sees what is there.
+#[cfg(unix)]
+fn read_what_is_left(pipe: &tokio::process::ChildStderr, bytes: &mut Vec<u8>) {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+    // The same open pipe (and so non-blocking, as the runtime made it).
+    let Ok(fd) = pipe.as_fd().try_clone_to_owned() else {
+        return;
+    };
+    let mut file = std::fs::File::from(fd);
+    let mut buf = [0u8; 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // `WouldBlock`: nothing more is there, though another process holds the pipe.
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_what_is_left(_: &tokio::process::ChildStderr, _: &mut Vec<u8>) {}
+
+#[cfg(unix)]
+fn exit_signal(st: &std::process::ExitStatus) -> Option<i32> {
+    std::os::unix::process::ExitStatusExt::signal(st)
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_: &std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+wasit_diag::diag_events! {
+    /// The sign-in command of a shared connection, recorded in the shape of a transport
+    /// command's records (`transport.spawned` / `transport.exited`), which the transport layer
+    /// keeps private: the sign-in is spawned here, in its own session, so it is recorded here.
+    pub(crate) enum SignInEvent {
+        #[diag(ev = "transport.spawned", budget = 300)]
+        Spawned {
+            link: Ident,
+            host: Option<Ident>,
+            n: u64,
+            program: Code,
+            argc: u32,
+            pid: Option<u32>,
+        },
+        #[diag(ev = "transport.exited", budget = 300)]
+        Exited {
+            link: Ident,
+            host: Option<Ident>,
+            n: u64,
+            code: Option<i32>,
+            signal: Option<i32>,
+        },
     }
 }
 

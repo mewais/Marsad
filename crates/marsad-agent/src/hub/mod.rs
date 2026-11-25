@@ -215,6 +215,8 @@ impl HubServices {
         if !base.refreshing {
             return Ok(base);
         }
+        // Once per launch that has to wait: the host is still probing. Content-free (the host's id).
+        crate::hub_events::launch_waiting_inventory(host);
         // Subscribed before the check that follows, so a change after this point is an event,
         // and a change before it is seen by that check.
         let mut c = ctx.clone();

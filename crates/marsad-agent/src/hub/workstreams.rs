@@ -52,7 +52,7 @@ use wasl_proto::{
     TaskId, TaskState, TaskView, Topology, TopologyApplied,
 };
 
-use super::fleet::{Fleet, Follow, Resubscribe, Step};
+use super::fleet::{Fleet, Follow, Resubscribe, Resume, Step, NO_EVENTS};
 use super::ring::{self, Joined, Ring};
 use crate::hub_events;
 use crate::util::now_ms;
@@ -424,7 +424,10 @@ impl Workstreams {
             let mut last: Option<Cursor> = None;
             let mut resume = Resubscribe::default();
             loop {
+                // Taken before the subscription opens, so a change from here on is never missed.
+                let mut changes = fleet.changes();
                 let mut lagged = false;
+                let mut failed = false;
                 match fleet.subscribe(last.clone()).await {
                     Ok(mut s) => {
                         while let Some(item) = s.next().await {
@@ -447,9 +450,21 @@ impl Workstreams {
                             }
                         }
                     }
-                    Err(e) => hub_events::fleet_follow_failed(&e),
+                    Err(e) => {
+                        failed = true;
+                        hub_events::fleet_follow_failed(&e);
+                    }
                 }
-                resume.after_end(lagged).await;
+                if resume.after_end(lagged) == Resume::AfterChange {
+                    // Recorded here only when the failure was not recorded above.
+                    if !failed {
+                        hub_events::fleet_follow_failed(&NO_EVENTS);
+                    }
+                    // The next subscription waits for a link, host or fleet state change.
+                    if changes.changed().await.is_err() {
+                        return;
+                    }
+                }
             }
         });
     }

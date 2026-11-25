@@ -68,7 +68,7 @@ use wasit_control::{
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
 use super::auth::{Asking, Prompts, SignInAttempt};
-use super::master::{Check, Masters};
+use super::master::{Check, Masters, SignInCommand, SignInStep};
 use super::transport::{
     bootstrap_argv_via, helper_target, native_windows_sign, platform_from, triple_platform,
     RemoteShell, SshRoute,
@@ -1355,13 +1355,15 @@ impl BootstrapConnector {
     /// 3. If not, and the host needs the user at login (or they signed out) and they have not
     ///    asked for this attempt, the attempt fails as "needs the user" without starting
     ///    anything, whatever happened between the supervisor's question ([`hold`]) and now.
-    /// 4. Otherwise the sign-in step: `ssh -M -N -f` with the askpass helper, where every prompt
-    ///    of the attempt happens. It ends, with status 0, when ssh has authenticated and left
-    ///    the connection open in the background: that exit is the signal (nothing is polled or
-    ///    waited for). A failure is classified from its exit status and what ssh said, as the
-    ///    one command of a host without a shared connection is. Its human time is the prompts'
-    ///    (each bounded by the hub's prompt timeout) and its machine time ssh's own
-    ///    `ConnectTimeout`; the attempt as a whole is bounded by the supervisor, as ever.
+    /// 4. Otherwise the sign-in step: `ssh -M -N -n` (no `-f`) with the askpass helper, where
+    ///    every prompt of the attempt happens. The hub owns that process until the connection
+    ///    is open: ssh's detaching (status 0, once it authenticated) and the socket's appearance
+    ///    are what [`Masters::sign_in`] waits for, with one check; a failure kills the process
+    ///    the hub started, and nothing is bounded by time. A failure is classified from its exit
+    ///    status and what ssh logged, as the one command of a host without a shared connection
+    ///    is. Its human time is the prompts' (each bounded by the hub's prompt timeout) and its
+    ///    machine time ssh's own `ConnectTimeout`; a slow host only takes longer, and the
+    ///    attempt as a whole is bounded by the supervisor, as ever.
     ///
     /// [`hold`]: LinkConnector::hold
     async fn shared_connection(
@@ -1434,57 +1436,67 @@ impl BootstrapConnector {
         )
         .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
         .map_err(at(BootStage::Prepare))?;
-        let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
-        cmd.env = self.askpass_env(exe, host, signin);
-        let (_io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
-        let exit = child.wait_exit_unbounded().await;
-        let code = exit.and_then(|e| e.code);
-        if code != Some(0) {
-            // With `-E` ssh's own messages go to the connection's log, not to its stderr.
-            let log = self.masters.signin_failure_text(&control).await;
-            let said = child.stderr_tail();
-            let text = [said.as_str(), log.as_str()]
-                .iter()
-                .filter(|t| !t.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut kind = classify_command_failure(code, &text);
-            if signin.asked() > 0 && kind == CommandFailureKind::Other {
-                // A cancelled or timed-out prompt makes ssh give up without a recognisable
-                // message.
-                kind = CommandFailureKind::AuthNeeded;
+        let cmd = SignInCommand {
+            argv,
+            env: self.askpass_env(exe, host, signin),
+            link: spec.diag_link(),
+            attempt: trail.n(),
+        };
+        match self.masters.sign_in(entry, &control, generation, cmd).await {
+            SignInStep::Open => {}
+            SignInStep::Unstarted(why) => {
+                return Err(ConnectError::Spawn(why)).map_err(at(BootStage::Spawn));
             }
-            let detail = if text.is_empty() {
-                format!("signing in to the host failed (exit {code:?})")
-            } else {
-                text
-            };
-            return Err(Failure {
-                stage: BootStage::SignIn,
-                error: cmd_err(kind, code, detail),
-            });
-        }
-        // The exit says ssh authenticated; ask the socket whether it is the connection that
-        // stayed (ssh goes on without sharing when it cannot listen on the socket).
-        // WHY this branch reports the failure and does not stop the sign-in: when ssh could not
-        // share the connection it went on without one, and under `-N -f` that process stays in
-        // the background with nothing to end it. This is a known rare leak, pending the B11
-        // redesign of the sign-in; until then the diagnostic below is what the user gets.
-        if self.masters.check(entry, &control, Some(trail.n())).await != Check::Alive {
-            let why = self.masters.signin_failure_text(&control).await;
-            return Err(Failure {
-                stage: BootStage::SignIn,
-                error: cmd_err(
-                    CommandFailureKind::Other,
-                    code,
-                    if why.is_empty() {
-                        "ssh signed in but left no shared connection open".to_owned()
-                    } else {
-                        format!("ssh signed in but left no shared connection open: {why}")
-                    },
-                ),
-            });
+            SignInStep::SignedOut => {
+                return Err(Failure {
+                    stage: BootStage::SignIn,
+                    error: signed_out_refusal(),
+                })
+            }
+            SignInStep::Ended { exit, stderr } => {
+                // With `-E` most of ssh's messages go to the connection's log; what it says
+                // before it opens the log (an unreadable identity file) is on its stderr.
+                let code = exit.code;
+                let log = self.masters.signin_failure_text(&control).await;
+                let text = [stderr.as_str(), log.as_str()]
+                    .iter()
+                    .filter(|t| !t.is_empty())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let mut kind = classify_command_failure(code, &text);
+                if signin.asked() > 0 && kind == CommandFailureKind::Other {
+                    // A cancelled or timed-out prompt makes ssh give up without a recognisable
+                    // message.
+                    kind = CommandFailureKind::AuthNeeded;
+                }
+                let detail = if text.is_empty() {
+                    format!("signing in to the host failed (exit {code:?})")
+                } else {
+                    text
+                };
+                return Err(Failure {
+                    stage: BootStage::SignIn,
+                    error: cmd_err(kind, code, detail),
+                });
+            }
+            SignInStep::NoConnection { code } => {
+                // Ended with status 0 and no connection, or killed because the check did not
+                // find one: the same report either way.
+                let why = self.masters.signin_failure_text(&control).await;
+                return Err(Failure {
+                    stage: BootStage::SignIn,
+                    error: cmd_err(
+                        CommandFailureKind::Other,
+                        code,
+                        if why.is_empty() {
+                            "ssh signed in but left no shared connection open".to_owned()
+                        } else {
+                            format!("ssh signed in but left no shared connection open: {why}")
+                        },
+                    ),
+                });
+            }
         }
         if self.masters.signed_in(host, generation) {
             emit(MarsadEvent::SshSignInDone {

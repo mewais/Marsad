@@ -218,11 +218,24 @@ async fn bridge(data: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::proce
     .unwrap()
 }
 
-/// The goodbye frame a bridge that cannot reach its daemon writes for the hub (unchanged wire).
+/// The frames a bridge that cannot reach its daemon writes for the hub: an informational
+/// `progress` frame saying it is starting the daemon (every such bridge tried to start one, so
+/// it must be there), then the `goodbye` frame with `bridge_unavailable` (unchanged wire).
 fn assert_bridge_unavailable_goodbye(out: &std::process::Output) {
-    let line = String::from_utf8_lossy(&out.stdout);
-    let frame: Value = serde_json::from_str(line.lines().next().unwrap()).unwrap();
-    assert_eq!(frame["reason"]["code"], "bridge_unavailable", "{frame}");
+    let frames: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let started = frames
+        .iter()
+        .any(|f| f["type"] == "progress" && f["step"] == wasit_control::STEP_STARTING_DAEMON);
+    assert!(started, "no progress frame before the goodbye: {frames:?}");
+    let goodbye = frames
+        .iter()
+        .find(|f| f["type"] != "progress")
+        .unwrap_or_else(|| panic!("no goodbye frame: {frames:?}"));
+    assert_eq!(goodbye["type"], "goodbye", "{goodbye}");
+    assert_eq!(goodbye["reason"]["code"], "bridge_unavailable", "{goodbye}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("bridge:"));
     assert_eq!(out.status.code(), Some(1));
 }

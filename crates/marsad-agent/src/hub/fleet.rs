@@ -204,12 +204,15 @@ enum Input {
 #[derive(Clone)]
 pub struct Fleet {
     tx: mpsc::Sender<Input>,
+    /// Bumped by the aggregator on every link and host change (see [`Fleet::changes`]).
+    changes: watch::Sender<()>,
 }
 
 struct State {
     hosts: BTreeMap<HostId, FleetHost>,
     ring: Ring<FleetEvent>,
     git: Option<GitWatch>,
+    changes: watch::Sender<()>,
 }
 
 /// A snapshot change that can change the working tree: a new session, a finished tool call or
@@ -234,6 +237,13 @@ impl State {
     }
 
     fn apply(&mut self, input: Input) {
+        // A link or host change: a feed that waits for one may open its subscription again.
+        if matches!(
+            input,
+            Input::HostUpserted(..) | Input::HostRemoved(_) | Input::Link(..)
+        ) {
+            self.changes.send_replace(());
+        }
         match input {
             Input::HostUpserted(entry, link) => {
                 let entry = *entry;
@@ -427,36 +437,48 @@ impl State {
     }
 }
 
+/// What a feed does once its subscription ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Resume {
+    /// Open the subscription again at once.
+    Now,
+    /// Record the failure, then wait for the next link, host or fleet state change
+    /// ([`Fleet::changes`]) before opening it again.
+    AfterChange,
+}
+
 /// When a feed whose subscription ended opens it again.
 ///
-/// A lag resumes at once, from the last cursor, and so does the first end after events. An end
-/// that delivered nothing is a failure, and from the second one in a row on the resubscribe waits
-/// on a backoff schedule: a feed that keeps failing must not spin, but it is never given up on.
-/// Any delivered event starts the count again.
+/// A lag resumes at once, from the last cursor, and so does an end after events (the subscription
+/// worked). An end that delivered nothing is a failure to deliver: the feed records it and waits
+/// for the next state change before it asks again. There is no timer. A feed that keeps failing
+/// waits for a change: it does not spin, and it is never given up on.
 #[derive(Debug, Default)]
 pub(super) struct Resubscribe {
-    ends_without_events: u32,
+    /// The subscription that just ended delivered an event.
+    delivered: bool,
 }
 
 impl Resubscribe {
     /// An event arrived: the subscription works.
     pub(super) fn delivered(&mut self) {
-        self.ends_without_events = 0;
+        self.delivered = true;
     }
 
-    /// Waits as long as a subscription that ended calls for before it is opened again (`lagged`:
-    /// it ended because it fell behind).
-    pub(super) async fn after_end(&mut self, lagged: bool) {
-        if lagged {
-            return;
-        }
-        self.ends_without_events = self.ends_without_events.saturating_add(1);
-        if self.ends_without_events > 1 {
-            let shift = (self.ends_without_events - 1).min(10);
-            tokio::time::sleep(Duration::from_millis(10u64 << shift)).await;
+    /// Decides how the subscription that ended is opened again (`lagged`: it ended because it fell
+    /// behind). The next subscription is counted from no events.
+    pub(super) fn after_end(&mut self, lagged: bool) -> Resume {
+        let delivered = std::mem::take(&mut self.delivered);
+        if lagged || delivered {
+            Resume::Now
+        } else {
+            Resume::AfterChange
         }
     }
 }
+
+/// The feed error recorded when a subscription ends without delivering any event.
+pub(super) const NO_EVENTS: &str = "the feed ended without delivering events";
 
 /// The local feed's loop: every event of `host.sessions` goes into the fleet, from the
 /// subscription `subscribe` opens (given the last cursor delivered). Runs until the process
@@ -471,8 +493,11 @@ async fn run_local_feed<S>(
     let mut last: Option<String> = None;
     let mut resume = Resubscribe::default();
     loop {
+        // Taken before the subscription opens, so a change from here on is never missed.
+        let mut changes = fleet.changes();
         let mut s = subscribe(last.clone());
         let mut lagged = false;
+        let mut errored = false;
         while let Some(item) = s.next().await {
             match item {
                 Ok((c, ev)) => {
@@ -488,28 +513,55 @@ async fn run_local_feed<S>(
                 Err(StreamEnd::Error(e)) => {
                     // The feed resubscribes; the text is the runtime's.
                     feed_record(&host, FeedEvent::Ended, Some(diag::foreign("stream", &e)));
+                    errored = true;
                     break;
                 }
             }
         }
-        resume.after_end(lagged).await;
+        if resume.after_end(lagged) == Resume::AfterChange {
+            // The error is recorded here only when the end was not already recorded above.
+            if !errored {
+                feed_record(
+                    &host,
+                    FeedEvent::Ended,
+                    Some(diag::foreign("no_events", NO_EVENTS)),
+                );
+            }
+            fleet
+                .send(Input::FeedError(host.clone(), Some(NO_EVENTS.to_string())))
+                .await;
+            // The link, host or fleet state changes: the feed opens its subscription again. The
+            // fleet is gone when this errs, and the feed ends with it.
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
     }
 }
 
 impl Fleet {
     pub fn spawn() -> Fleet {
         let (tx, mut rx) = mpsc::channel(INPUT_QUEUE);
+        let (changes, _) = watch::channel(());
         let mut st = State {
             hosts: BTreeMap::new(),
             ring: Ring::new(),
             git: None,
+            changes: changes.clone(),
         };
         tokio::spawn(async move {
             while let Some(i) = rx.recv().await {
                 st.apply(i);
             }
         });
-        Fleet { tx }
+        Fleet { tx, changes }
+    }
+
+    /// Resolves each time a link state or a host changes, from the moment this receiver was taken
+    /// (`changed`; it errs once the aggregator is gone). The feeds wait on it before they open a
+    /// subscription that failed without delivering anything.
+    pub(super) fn changes(&self) -> watch::Receiver<()> {
+        self.changes.subscribe()
     }
 
     async fn send(&self, i: Input) {
@@ -665,34 +717,122 @@ impl Fleet {
 mod tests {
     use super::*;
     use futures::stream::BoxStream;
-    use futures::FutureExt;
+    use marsad_proto::hosts::HostKind;
     use std::sync::Arc;
     use std::sync::Mutex;
 
     type Item = Result<(String, HostEvent), StreamEnd>;
 
-    #[tokio::test]
-    async fn a_lag_and_the_first_end_after_events_resume_at_once() {
+    #[test]
+    fn a_lag_and_an_end_after_events_resume_at_once() {
         let mut r = Resubscribe::default();
-        assert!(r.after_end(true).now_or_never().is_some());
-        assert!(r.after_end(true).now_or_never().is_some());
+        assert_eq!(r.after_end(true), Resume::Now);
+        assert_eq!(r.after_end(true), Resume::Now);
         r.delivered();
-        assert!(r.after_end(false).now_or_never().is_some());
+        assert_eq!(r.after_end(false), Resume::Now);
     }
 
-    #[tokio::test]
-    async fn ends_that_deliver_nothing_back_off_from_the_second_on() {
+    /// An end that delivered nothing waits for a state change, and each subscription is judged on
+    /// its own: an end after events does not carry over to the next one.
+    #[test]
+    fn an_end_that_delivered_nothing_waits_for_a_change() {
         let mut r = Resubscribe::default();
-        assert!(r.after_end(false).now_or_never().is_some(), "first end");
-        assert!(
-            r.after_end(false).now_or_never().is_none(),
-            "second end waits"
+        assert_eq!(
+            r.after_end(false),
+            Resume::AfterChange,
+            "an empty end waits"
         );
         r.delivered();
-        assert!(
-            r.after_end(false).now_or_never().is_some(),
-            "counted from zero again"
+        assert_eq!(r.after_end(false), Resume::Now, "an end after events");
+        assert_eq!(r.after_end(false), Resume::AfterChange, "counted from none");
+    }
+
+    /// How long a feed must stay closed after an empty end before the test takes that as "it did
+    /// not reopen". A reopen without a state change would come at once (the policy has no timer), so
+    /// this only bounds how long a correct feed is observed.
+    const QUIET: Duration = Duration::from_millis(300);
+    /// The bound on any step the feed is expected to reach.
+    const REACHED: Duration = Duration::from_secs(5);
+
+    /// A feed whose subscription ends without delivering anything records a feed error for its
+    /// host and does not open the subscription again until a link state changes.
+    #[tokio::test]
+    async fn a_feed_that_ends_empty_waits_for_a_state_change() {
+        let fleet = Fleet::spawn();
+        let host = HostId::new("h");
+        fleet
+            .host_upserted(
+                HostEntry {
+                    id: host.clone(),
+                    name: "h".to_string(),
+                    kind: HostKind::Local,
+                    platform: None,
+                    created_at_ms: 0,
+                    interactive_auth: false,
+                    local_files: true,
+                    shared_connection: false,
+                    signed_out: false,
+                    machine: None,
+                },
+                FleetLink::Local,
+            )
+            .await;
+        let mut events = fleet.subscribe(None).await.expect("the fleet subscribes");
+        let (opened_tx, mut opened) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let mut first = true;
+        let subscribe = move |_from: Option<String>| -> BoxStream<'static, Item> {
+            let _ = opened_tx.send(());
+            if std::mem::replace(&mut first, false) {
+                stream::empty().boxed()
+            } else {
+                stream::pending().boxed()
+            }
+        };
+        let feed = tokio::spawn(run_local_feed(fleet.clone(), host.clone(), subscribe));
+
+        assert_eq!(
+            tokio::time::timeout(REACHED, opened.recv()).await,
+            Ok(Some(())),
+            "the feed opens its subscription"
         );
+        // The failure is on record for the host (the fleet shows it).
+        let recorded = tokio::time::timeout(REACHED, async {
+            while let Some(item) = events.next().await {
+                let (_, v) = item.expect("the fleet feed");
+                if let Ok(FleetEvent::FeedError {
+                    host: h,
+                    error: Some(_),
+                }) = serde_json::from_value(v)
+                {
+                    if h == host {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+        .await;
+        assert_eq!(
+            recorded,
+            Ok(true),
+            "the empty end is recorded as a feed error"
+        );
+
+        assert!(
+            tokio::time::timeout(QUIET, opened.recv()).await.is_err(),
+            "the feed reopened without a state change"
+        );
+
+        // A link state change is what reopens it.
+        fleet
+            .send(Input::Link(host.clone(), LinkState::Connecting))
+            .await;
+        assert_eq!(
+            tokio::time::timeout(REACHED, opened.recv()).await,
+            Ok(Some(())),
+            "the feed reopens after a link state change"
+        );
+        feed.abort();
     }
 
     /// Every subscription lags at once, 50 times over; the 51st waits for an event. Each lag must

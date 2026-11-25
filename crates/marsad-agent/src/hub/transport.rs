@@ -48,9 +48,12 @@ pub enum SshRoute<'a> {
     /// configuration from putting it on a connection of its own.
     Plain,
     /// The sign-in step: ssh authenticates (every prompt of the attempt happens here), becomes
-    /// the master listening on `control`, detaches into the background and exits with status 0.
-    /// That exit is the signal that the connection is open. Its messages go to `<control>.log`
-    /// (`-E`), because the detached process keeps writing there for as long as it lives.
+    /// the master listening on `control` and detaches into the background (`ControlPersist`),
+    /// the process that was started exiting with status 0 once it has. It runs without `-f`:
+    /// the hub starts it as its own child, so the hub can end it when the sign-in fails and
+    /// watch for the socket instead of trusting the exit alone (see `Masters::sign_in`). `-n`:
+    /// it never reads the hub's stdin. Its messages go to `<control>.log` (`-E`), because the
+    /// detached master keeps writing there for as long as it lives.
     SignIn { control: &'a Path },
     /// A link step: the bootstrap rides the master at `control`. `BatchMode=yes`: it can never
     /// prompt. When no master is there it connects directly (a key host) or fails without
@@ -134,7 +137,7 @@ pub fn transport_prefix_via(kind: &HostKind, route: SshRoute<'_>) -> Option<Vec<
                     argv.extend(o("BatchMode=yes".into()));
                 }
                 SshRoute::SignIn { control } => {
-                    argv.extend(["-M".to_string(), "-N".to_string(), "-f".to_string()]);
+                    argv.extend(["-M".to_string(), "-N".to_string(), "-n".to_string()]);
                     argv.extend(o("ControlMaster=yes".into()));
                     argv.extend(o(control_option(control)));
                     argv.extend(o("ControlPersist=yes".into()));
@@ -512,7 +515,8 @@ mod tests {
         assert!(!POSIX_BOOTSTRAP.contains('\''));
         // The sign-in step of a shared connection (only this step may prompt): no BatchMode,
         // no remote command, the keep-alive of the connection that will live on, and the master
-        // detached (`-f`), kept for ever (`ControlPersist=yes`), logging next to its socket.
+        // a background process of ssh's own (`ControlPersist=yes`) that the hub starts without
+        // `-f` and never reads stdin of (`-n`), logging next to its socket.
         let ctl = Path::new("/run/m/ssh/0123456789abcdef");
         let sign =
             bootstrap_argv_via(&e, RemoteShell::Posix, SshRoute::SignIn { control: ctl }).unwrap();
@@ -528,12 +532,13 @@ mod tests {
             "UserKnownHostsFile=/kh",
             "-M",
             "-N",
-            "-f",
+            "-n",
             "-E",
             "/run/m/ssh/0123456789abcdef.log",
         ] {
             assert!(sign.iter().any(|x| x == o), "{o} in {sign:?}");
         }
+        assert!(!sign.iter().any(|x| x == "-f"), "no -f: {sign:?}");
         assert!(!sign.iter().any(|x| x.starts_with("BatchMode")), "{sign:?}");
         assert!(!sign.iter().any(|x| x == "-T"), "{sign:?}");
         assert_eq!(

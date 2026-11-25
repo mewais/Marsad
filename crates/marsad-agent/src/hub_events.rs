@@ -103,6 +103,10 @@ wasit_diag::diag_events! {
             host: Ident,
             error: ErrorInfo,
         },
+        /// A launch is waiting for a host's agent list: the host is still probing its drivers, and
+        /// the launch resumes when the probes finish. Content-free: the host's id only.
+        #[diag(ev = "launch.waiting_inventory", lvl = debug)]
+        LaunchWaitingInventory { host: Ident },
         /// The first prompt of a launched node was not delivered to its session.
         #[diag(ev = "launch.first_prompt_failed", lvl = warn)]
         FirstPromptFailed {
@@ -313,6 +317,11 @@ pub fn launch_topology_push_failed(
         host: ident(host),
         error: foreign("topology_push", e),
     });
+}
+
+/// A launch waits for `host`'s agent list: its probes have not finished.
+pub fn launch_waiting_inventory(host: &impl Display) {
+    record(HubEvent::LaunchWaitingInventory { host: ident(host) });
 }
 
 /// The first prompt of `node` of `workstream` was not delivered.
@@ -572,6 +581,14 @@ mod tests {
                 "launch.topology_push_failed",
                 "warn",
                 &["workstream", "host", "error"],
+            ),
+            (
+                HubEvent::LaunchWaitingInventory {
+                    host: Ident::st("host-1"),
+                },
+                "launch.waiting_inventory",
+                "debug",
+                &["host"],
             ),
             (
                 HubEvent::FirstPromptFailed {

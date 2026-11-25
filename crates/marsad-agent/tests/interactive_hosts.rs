@@ -1555,8 +1555,8 @@ async fn signing_out_ends_the_connection_and_the_host_waits_and_is_not_retried()
 }
 
 /// A sign-out that happens while ssh is still signing in (its connection held by a proxy
-/// command the test releases) does not let that sign-in land: the master it would have opened is
-/// ended and the host stays signed out, with no socket left behind.
+/// command the test releases) does not let that sign-in land: the sign-in ssh is ended before any
+/// master exists, and the host stays signed out, with no socket left behind.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
     use std::os::unix::fs::PermissionsExt;
@@ -1628,9 +1628,11 @@ async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
         .expect("the proxy is held at the gate")
         .expect("the proxy's ready line");
     assert_eq!(said, "ready\n");
-    // While the sign-in is blocked, the user signs out.
-    r.c.sign_out_host(&r.id).await.unwrap();
+    // While the sign-in is blocked, the user signs out. The marker is read first: the sign-out
+    // ends our sign-in ssh at once, so its record is part of the window (there is no master to
+    // end, and the exit is recorded as `no_master`, not `ended`).
     let from = r.marker().await;
+    r.c.sign_out_host(&r.id).await.unwrap();
 
     // Release the proxy and let the in-flight ssh finish.
     release.write_all(b"go\n").await.unwrap();
@@ -1646,7 +1648,11 @@ async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
     assert!(held, "the host waits for the user after sign-out");
     assert!(detail.contains("signed out"), "{detail:?}");
 
-    // No master survived (no socket, no pid), and its attempted exit is on record.
+    // No master survived (no socket, no pid), and the exits are on record. Both exits are
+    // `no_master`: the sign-out's own exit, and the sign-in's exit after it killed its ssh (a
+    // master could have bound the socket between the two, so the sign-in checks again). The
+    // marker is read before the sign-out, so both are inside the window, each of them `signed_out`
+    // and `no_master`: none ended a master, since none existed.
     assert!(master_pid(&r.master()).is_none());
     assert!(!r.master().exists());
     let window = r.window(from).await;
@@ -1655,7 +1661,10 @@ async fn signing_out_while_signing_in_leaves_the_host_signed_out() {
             .iter()
             .map(|e| (&e["why"], &e["outcome"]))
             .collect::<Vec<_>>(),
-        [(&json!("signed_out"), &json!("ended"))],
+        [
+            (&json!("signed_out"), &json!("no_master")),
+            (&json!("signed_out"), &json!("no_master")),
+        ],
         "{window:#?}"
     );
 }
