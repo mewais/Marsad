@@ -52,7 +52,7 @@ use wasl_proto::{
     TaskId, TaskState, TaskView, Topology, TopologyApplied,
 };
 
-use super::fleet::{Fleet, Follow, Resubscribe, Resume, Step, NO_EVENTS};
+use super::fleet::{Ending, Fleet, Follow, Resubscribe, Resume, Step, NO_EVENTS};
 use super::ring::{self, Joined, Ring};
 use crate::hub_events;
 use crate::util::now_ms;
@@ -424,19 +424,25 @@ impl Workstreams {
             let mut last: Option<Cursor> = None;
             let mut resume = Resubscribe::default();
             loop {
-                // Taken before the subscription opens, so a change from here on is never missed.
+                // Taken before the subscription opens, so a wake from here on is never missed.
                 let mut changes = fleet.changes();
-                let mut lagged = false;
-                let mut failed = false;
-                match fleet.subscribe(last.clone()).await {
+                let ending = match fleet.subscribe(last.clone()).await {
                     Ok(mut s) => {
+                        let mut ending = Ending::Closed;
                         while let Some(item) = s.next().await {
                             let (c, v) = match item {
                                 Ok(x) => x,
-                                Err(e) => {
-                                    lagged = matches!(e, CloseReason::Lagged);
+                                Err(CloseReason::Lagged) => {
+                                    ending = Ending::Lagged;
                                     break;
                                 }
+                                Err(CloseReason::Error { error }) => {
+                                    hub_events::fleet_follow_failed(&error);
+                                    ending = Ending::Failed(error.to_string());
+                                    break;
+                                }
+                                // The topic has no more events: an empty end, as a closed stream.
+                                Err(CloseReason::Ended | CloseReason::HostLost) => break,
                             };
                             resume.delivered();
                             last = Some(c);
@@ -449,18 +455,20 @@ impl Workstreams {
                                 Err(e) => hub_events::fleet_event_undecodable(&e),
                             }
                         }
+                        ending
                     }
                     Err(e) => {
-                        failed = true;
                         hub_events::fleet_follow_failed(&e);
+                        Ending::Failed(e.to_string())
                     }
-                }
-                if resume.after_end(lagged) == Resume::AfterChange {
-                    // Recorded here only when the failure was not recorded above.
-                    if !failed {
+                };
+                if resume.ended(&ending) == Resume::AfterWake {
+                    // A failure is recorded above; an empty end is recorded here.
+                    if ending == Ending::Closed {
                         hub_events::fleet_follow_failed(&NO_EVENTS);
                     }
-                    // The next subscription waits for a link, host or fleet state change.
+                    // The next subscription waits for the fleet's wake signal (a link, host or
+                    // fleet state change).
                     if changes.changed().await.is_err() {
                         return;
                     }
