@@ -336,6 +336,35 @@ pub fn client(data: &Path) -> MarsadClient {
     client_with(data, true)
 }
 
+/// The environment of a daemon a test starts itself: every home its drivers and discovery read
+/// (`HOME`, the Windows profile, the config directories the CLIs honour, the XDG directories) is
+/// `home`, a directory the test makes. So no test reads the owner's own `~/.claude.json`,
+/// `~/.codex`, `~/.kilo` or `~/.marsad`. Nothing here is printed: those files can hold credentials.
+pub fn isolated_home_env(home: &Path) -> Vec<(String, String)> {
+    let p = |rel: &str| home.join(rel).to_string_lossy().into_owned();
+    vec![
+        ("HOME".into(), home.to_string_lossy().into_owned()),
+        ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR".into(), p(".claude")),
+        ("CODEX_HOME".into(), p(".codex")),
+        ("XDG_CONFIG_HOME".into(), p(".config")),
+        ("XDG_DATA_HOME".into(), p(".local/share")),
+        ("XDG_STATE_HOME".into(), p(".local/state")),
+        ("XDG_CACHE_HOME".into(), p(".cache")),
+    ]
+}
+
+/// A client of a daemon that it starts with the environment of [`isolated_home_env`] for `home`.
+pub fn client_with_home(data: &Path, home: &Path) -> MarsadClient {
+    let mut cfg = client_config(data, Hello::new("test", "gui-test", "gui"));
+    cfg.start_daemon = true;
+    cfg.serve_args = serve_args();
+    cfg.daemon_env = isolated_home_env(home);
+    cfg.supervise.backoff.initial = Duration::from_millis(50);
+    cfg.supervise.backoff.max = Duration::from_millis(500);
+    MarsadClient::connect(cfg)
+}
+
 /// A client of a daemon the test started itself: it never starts one, so ending that daemon does
 /// not bring up a successor behind the test's back. Otherwise the same as [`client`].
 pub fn client_of(data: &Path) -> MarsadClient {

@@ -28,6 +28,7 @@
 //! through [`Workstreams::edit`] with their spawner connected.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -37,11 +38,13 @@ use marsad_proto::workstream::{
     TopologySync, Workstream, WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
     RECENT_SPAWNS,
 };
-use marsad_proto::{HostId, MarsadError, SessionSnapshot};
+use marsad_proto::{HostId, LinkState, MarsadError, SessionSnapshot};
 use marsad_store::Store;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use wasit_control::{Cursor, EventStream, RequestOpts, RpcError, Supervised};
+use wasit_control::{
+    CallError, CloseReason, Cursor, EventStream, RequestOpts, RpcError, Supervised,
+};
 use wasit_core::GateRequest;
 use wasl_proto::{
     methods as wasl_methods, spawn_request_id, topics as wasl_topics, AgentId, Edge,
@@ -49,15 +52,17 @@ use wasl_proto::{
     TaskId, TaskState, TaskView, Topology, TopologyApplied,
 };
 
-use super::fleet::{Fleet, Follow, Step};
+use super::fleet::{Fleet, Follow, Resubscribe, Step};
 use super::ring::{self, Joined, Ring};
 use crate::hub_events;
 use crate::util::now_ms;
 
 const MAILBOX: usize = 1024;
-/// Bound on one topology push.
+/// Bound on one topology push request.
 const PUSH_DEADLINE: Duration = Duration::from_secs(20);
-const PUSH_ATTEMPTS: u32 = 6;
+/// How long one topology push request waits for the link to be connected (it was, when the push
+/// started; a link that dropped meanwhile fails the request as retryable).
+const PUSH_WAIT: Duration = Duration::from_secs(5);
 
 /// A change to one document, applied by the actor to a copy (nothing changes on `Err`).
 pub type EditFn = Box<dyn FnOnce(&mut Workstream) -> Result<(), MarsadError> + Send>;
@@ -417,13 +422,20 @@ impl Workstreams {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let mut last: Option<Cursor> = None;
-            let mut failures = 0u32;
+            let mut resume = Resubscribe::default();
             loop {
+                let mut lagged = false;
                 match fleet.subscribe(last.clone()).await {
                     Ok(mut s) => {
                         while let Some(item) = s.next().await {
-                            let Ok((c, v)) = item else { break };
-                            failures = 0;
+                            let (c, v) = match item {
+                                Ok(x) => x,
+                                Err(e) => {
+                                    lagged = matches!(e, CloseReason::Lagged);
+                                    break;
+                                }
+                            };
+                            resume.delivered();
                             last = Some(c);
                             match serde_json::from_value::<FleetEvent>(v) {
                                 Ok(e) => {
@@ -437,9 +449,7 @@ impl Workstreams {
                     }
                     Err(e) => hub_events::fleet_follow_failed(&e),
                 }
-                failures = failures.saturating_add(1);
-                // Backoff schedule for a feed that keeps failing.
-                tokio::time::sleep(Duration::from_millis(10u64 << failures.min(10))).await;
+                resume.after_end(lagged).await;
             }
         });
     }
@@ -1249,23 +1259,45 @@ impl Actor {
     }
 }
 
-/// Push `t` to `host`'s node, retrying retryable failures on a backoff schedule.
+/// Push `t` to `host`'s node, once the host's link is connected (see [`push_when_connected`]).
 pub async fn push_topology(link: &Supervised, host: &HostId, t: &Topology) -> Result<(), String> {
-    let mut delay = Duration::from_millis(200);
-    let mut attempt = 0;
+    push_when_connected(
+        link.state(),
+        move || async move {
+            let opts = RequestOpts::new(PUSH_DEADLINE).host(host.clone());
+            link.request::<TopologyApplied>(wasl_methods::TOPOLOGY_SET, t, opts, PUSH_WAIT)
+                .await
+                .map(|_| ())
+        },
+        |e| hub_events::topology_push_retry(host, e),
+    )
+    .await
+}
+
+/// Runs `send` once the link is connected, and again after each retryable failure once it
+/// connects again. What is waited for is the link's own state (a change event, no timer): the
+/// link's supervisor decides when it reconnects, and a push that failed while connected waits for
+/// the next change of that state rather than for a guessed delay. A failure that is not retryable
+/// ends the push with its text.
+async fn push_when_connected<Fut>(
+    mut state: watch::Receiver<LinkState>,
+    mut send: impl FnMut() -> Fut,
+    mut on_retry: impl FnMut(&CallError),
+) -> Result<(), String>
+where
+    Fut: Future<Output = Result<(), CallError>>,
+{
     loop {
-        attempt += 1;
-        let opts = RequestOpts::new(PUSH_DEADLINE).host(host.clone());
-        let r: Result<TopologyApplied, _> = link
-            .request(wasl_methods::TOPOLOGY_SET, t, opts, Duration::from_secs(5))
-            .await;
-        match r {
-            Ok(_) => return Ok(()),
-            Err(e) if e.is_retryable() && attempt < PUSH_ATTEMPTS => {
-                hub_events::topology_push_retry(host, &e);
-                // Backoff schedule.
-                tokio::time::sleep(delay).await;
-                delay = (delay * 2).min(Duration::from_secs(5));
+        if state.wait_for(|s| s.is_connected()).await.is_err() {
+            return Err("the host's link is gone".into());
+        }
+        match send().await {
+            Ok(()) => return Ok(()),
+            Err(e) if e.is_retryable() => {
+                on_retry(&e);
+                if state.changed().await.is_err() {
+                    return Err(e.to_string());
+                }
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -1276,6 +1308,7 @@ pub async fn push_topology(link: &Supervised, host: &HostId, t: &Topology) -> Re
 mod tests {
     use super::*;
     use marsad_proto::workstream::{WorkstreamEdge, WorkstreamNode};
+    use std::sync::{Arc, Mutex};
 
     fn node(id: &str, session: Option<(&str, &str)>) -> WorkstreamNode {
         WorkstreamNode {
@@ -1347,5 +1380,87 @@ mod tests {
         ws.nodes[1].launch = None;
         assert!(validate(&ws).is_err());
         assert_eq!(slug("  My Review Team! "), "my-review-team");
+    }
+
+    fn connected() -> LinkState {
+        LinkState::Connected {
+            hello: wasit_control::Hello::new("test-build", "test", "test"),
+        }
+    }
+
+    fn reconnecting() -> LinkState {
+        LinkState::Reconnecting {
+            attempt: 1,
+            next_at: std::time::SystemTime::now(),
+            last_error: "dropped".into(),
+        }
+    }
+
+    /// The push is not sent while the host is down: the first attempt waits for the connect.
+    #[tokio::test]
+    async fn topology_is_pushed_on_connect() {
+        let (tx, rx) = watch::channel(LinkState::Connecting);
+        let sends = Arc::new(Mutex::new(0usize));
+        let counted = sends.clone();
+        let push = tokio::spawn(push_when_connected(
+            rx,
+            move || {
+                *counted.lock().unwrap() += 1;
+                async { Ok(()) }
+            },
+            |_| {},
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            *sends.lock().unwrap(),
+            0,
+            "pushed before the host connected"
+        );
+        tx.send_replace(connected());
+        let r = tokio::time::timeout(Duration::from_secs(5), push)
+            .await
+            .expect("the push ends once connected")
+            .unwrap();
+        assert_eq!(r, Ok(()));
+        assert_eq!(*sends.lock().unwrap(), 1);
+    }
+
+    /// A retryable failure is not retried on a timer: the next attempt waits for a change of the
+    /// link state, and comes after the link connects again.
+    #[tokio::test]
+    async fn a_retryable_failure_waits_for_the_next_connect() {
+        let (tx, rx) = watch::channel(connected());
+        let sends = Arc::new(Mutex::new(0usize));
+        let counted = sends.clone();
+        let push = tokio::spawn(push_when_connected(
+            rx,
+            move || {
+                let mut n = counted.lock().unwrap();
+                *n += 1;
+                let first = *n == 1;
+                async move {
+                    if first {
+                        Err(CallError::Timeout)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            |_| {},
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            *sends.lock().unwrap(),
+            1,
+            "retried without a change of the link"
+        );
+        tx.send_replace(reconnecting());
+        tx.send_replace(connected());
+        let r = tokio::time::timeout(Duration::from_secs(5), push)
+            .await
+            .expect("the push ends after the reconnect")
+            .unwrap();
+        assert_eq!(r, Ok(()));
+        assert_eq!(*sends.lock().unwrap(), 2);
     }
 }

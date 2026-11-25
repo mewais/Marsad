@@ -8,7 +8,6 @@ pub mod git;
 pub mod pty;
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use marsad_proto::agentconfig::{BaseConfig, BaseRequest};
@@ -27,9 +26,6 @@ use wasit_core::DiscoveryKind;
 use wasit_runtime::{Discovery, SessionManager};
 
 use crate::util::{ok, params};
-
-/// How long `agentconfig.base` waits for running probes.
-const BASE_WAIT: Duration = Duration::from_secs(90);
 
 /// See the module docs.
 #[derive(Clone)]
@@ -66,6 +62,10 @@ impl HostServices {
         }
     }
 
+    /// The driver's configuration as discovery holds it now, returned at once: a probe still
+    /// running is reported by `refreshing` (its items may be incomplete). The inventory topic
+    /// delivers each change, so a caller that needs the settled list waits for that instead of
+    /// holding this call open.
     async fn base(&self, r: BaseRequest) -> Result<BaseConfig, MarsadError> {
         let project = r.project.as_deref();
         if r.refresh {
@@ -73,47 +73,34 @@ impl HostServices {
                 .refresh(Some(&r.driver), project)
                 .map_err(MarsadError::invalid)?;
         }
-        let mut changes = self.discovery.changes();
-        let deadline = tokio::time::Instant::now() + BASE_WAIT;
-        loop {
-            let inv = self.discovery.inventory(project);
-            let e = inv
-                .drivers
-                .into_iter()
-                .find(|d| d.driver == r.driver)
-                .ok_or_else(|| MarsadError::invalid(format!("unknown driver {}", r.driver)))?;
-            let done = !e.refreshing && e.refreshed_at_ms > 0;
-            if done || tokio::time::Instant::now() >= deadline {
-                let mut errors: Vec<String> = e
-                    .probes
-                    .iter()
-                    .filter(|p| p.kind == DiscoveryKind::Config && !p.ok)
-                    .filter_map(|p| p.error.clone())
-                    .collect();
-                if let Some(err) = &e.error {
-                    errors.insert(0, err.clone());
-                }
-                // A list the engine had to shorten says so: the items shown are not all there are.
-                if let Some(n) = e.not_listed.filter(|n| n.config > 0) {
-                    errors.push(format!("{} more configured items are not listed", n.config));
-                }
-                return Ok(BaseConfig {
-                    driver: e.driver,
-                    project: r.project.clone(),
-                    items: e.config,
-                    refreshing: !done,
-                    errors,
-                    refreshed_at_ms: e.refreshed_at_ms,
-                });
-            }
-            // Signalled by discovery on every inventory change; bounded by the deadline.
-            if tokio::time::timeout_at(deadline, changes.changed())
-                .await
-                .is_err()
-            {
-                continue;
-            }
+        let inv = self.discovery.inventory(project);
+        let e = inv
+            .drivers
+            .into_iter()
+            .find(|d| d.driver == r.driver)
+            .ok_or_else(|| MarsadError::invalid(format!("unknown driver {}", r.driver)))?;
+        let done = !e.refreshing && e.refreshed_at_ms > 0;
+        let mut errors: Vec<String> = e
+            .probes
+            .iter()
+            .filter(|p| p.kind == DiscoveryKind::Config && !p.ok)
+            .filter_map(|p| p.error.clone())
+            .collect();
+        if let Some(err) = &e.error {
+            errors.insert(0, err.clone());
         }
+        // A list the engine had to shorten says so: the items shown are not all there are.
+        if let Some(n) = e.not_listed.filter(|n| n.config > 0) {
+            errors.push(format!("{} more configured items are not listed", n.config));
+        }
+        Ok(BaseConfig {
+            driver: e.driver,
+            project: r.project.clone(),
+            items: e.config,
+            refreshing: !done,
+            errors,
+            refreshed_at_ms: e.refreshed_at_ms,
+        })
     }
 }
 

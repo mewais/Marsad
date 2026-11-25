@@ -421,7 +421,10 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
 async fn fs_and_base_config() {
     let d = TempDir::new();
     let data = d.path().join("d");
-    let c = client(&data);
+    // The daemon reads its drivers' homes: they are this test's own and empty.
+    let home = d.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let c = client_with_home(&data, &home);
     std::fs::create_dir_all(d.path().join("proj/.git")).unwrap();
     std::fs::write(d.path().join("file.txt"), "x").unwrap();
     let l = c
@@ -465,11 +468,28 @@ async fn fs_and_base_config() {
         marsad_client::ClientError::Marsad(marsad_proto::MarsadError::NotFound { .. })
     ));
     // The fake CLI has no config commands: the base layer comes back with the probe errors,
-    // never silently empty.
-    let base = c
-        .agentconfig_base(None, "claude", None, false)
-        .await
-        .unwrap();
+    // never silently empty. The call answers at once; the probes that fill it run on, so wait
+    // for them to settle.
+    // Each change of the inventory is published on its topic: a refreshing answer is asked again
+    // after the next change, not after a timer.
+    let mut changes = c.subscribe_raw_with(
+        None,
+        wasit_runtime::wire::topics::DRIVERS_INVENTORY,
+        None,
+        json!({}),
+    );
+    let base = loop {
+        let b = c
+            .agentconfig_base(None, "claude", None, false)
+            .await
+            .unwrap();
+        if !b.refreshing {
+            break b;
+        }
+        tokio::time::timeout(T, next(&mut changes))
+            .await
+            .expect("the probes settle");
+    };
     assert!(!base.refreshing);
     assert!(!base.errors.is_empty(), "{base:?}");
 }

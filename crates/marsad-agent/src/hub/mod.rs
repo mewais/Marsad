@@ -51,7 +51,8 @@ use wasit_control::{CallContext, CloseReason, Cursor, EventStream, RpcError, Ser
 use wasit_core::DriverRegistry;
 use wasit_diag::{Code, Ident, ProjectPath};
 use wasit_runtime::wire::{
-    methods as rt_methods, CreateSession, CreateSessionReply, ResumeRequest,
+    methods as rt_methods, topics as rt_topics, CreateSession, CreateSessionReply,
+    InventoryRequest, ResumeRequest,
 };
 
 use crate::diag;
@@ -188,6 +189,85 @@ impl HubServices {
         serde_json::from_value(v).map_err(|e| MarsadError::io(format!("{method} reply: {e}")))
     }
 
+    /// The driver's base configuration on `host` once the host's probes for it have finished.
+    ///
+    /// `agentconfig.base` answers at once, with `refreshing` set while a probe runs; its items
+    /// are then incomplete, so a launch must not use them. The host publishes every inventory
+    /// change on its `drivers.inventory` topic, so this waits for those events and asks again
+    /// after each one. There is no timer: a slow host takes longer, the launch stays pending, and
+    /// dropping the call ends the wait. The subscription opens before the first check, so a change
+    /// between that check and the subscription cannot be missed.
+    async fn settled_base(
+        &self,
+        ctx: &CallContext,
+        host: &HostId,
+        driver: &DriverId,
+        project: Option<String>,
+    ) -> Result<BaseConfig, MarsadError> {
+        let request = BaseRequest {
+            driver: driver.clone(),
+            project: project.clone(),
+            refresh: false,
+        };
+        let base: BaseConfig = self
+            .on_host(ctx, host, methods::AGENTCONFIG_BASE, request.clone())
+            .await?;
+        if !base.refreshing {
+            return Ok(base);
+        }
+        // Subscribed before the check that follows, so a change after this point is an event,
+        // and a change before it is seen by that check.
+        let mut c = ctx.clone();
+        c.host = Some(host.clone());
+        let params = serde_json::to_value(InventoryRequest {
+            project: project.clone(),
+        })
+        .map_err(MarsadError::io)?;
+        let mut changes = self
+            .routing
+            .subscribe(c, rt_topics::DRIVERS_INVENTORY, params, None)
+            .await
+            .map_err(|e| MarsadError::Upstream {
+                message: format!("{} on {host}: {e}", rt_topics::DRIVERS_INVENTORY),
+                cause: e,
+            })?;
+        let base: BaseConfig = self
+            .on_host(ctx, host, methods::AGENTCONFIG_BASE, request.clone())
+            .await?;
+        if !base.refreshing {
+            return Ok(base);
+        }
+        loop {
+            match changes.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(reason)) => {
+                    return Err(MarsadError::Upstream {
+                        message: format!(
+                            "{} on {host} ended before {driver}'s probes finished: {reason:?}",
+                            rt_topics::DRIVERS_INVENTORY
+                        ),
+                        cause: RpcError::internal(format!("{reason:?}")),
+                    })
+                }
+                None => {
+                    return Err(MarsadError::Upstream {
+                        message: format!(
+                            "{} on {host} ended before {driver}'s probes finished",
+                            rt_topics::DRIVERS_INVENTORY
+                        ),
+                        cause: RpcError::internal("inventory stream closed"),
+                    })
+                }
+            }
+            let base: BaseConfig = self
+                .on_host(ctx, host, methods::AGENTCONFIG_BASE, request.clone())
+                .await?;
+            if !base.refreshing {
+                return Ok(base);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn effective(
         &self,
@@ -204,17 +284,8 @@ impl HubServices {
             .drivers
             .get(driver)
             .map_err(|_| MarsadError::invalid(format!("unknown driver {driver}")))?;
-        let base: BaseConfig = self
-            .on_host(
-                ctx,
-                host,
-                methods::AGENTCONFIG_BASE,
-                BaseRequest {
-                    driver: driver.clone(),
-                    project: project.clone(),
-                    refresh: false,
-                },
-            )
+        let base = self
+            .settled_base(ctx, host, driver, project.clone())
             .await?;
         let mut scopes = vec![LayerScope::Global, LayerScope::Host { host: host.clone() }];
         if let Some(w) = &workstream {

@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use futures::{stream, Stream, StreamExt};
 use marsad_proto::diag::{FeedEvent, MarsadEvent};
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink, GitSummary};
 use marsad_proto::hosts::{AuthPrompt, HostEntry};
@@ -426,6 +427,75 @@ impl State {
     }
 }
 
+/// When a feed whose subscription ended opens it again.
+///
+/// A lag resumes at once, from the last cursor, and so does the first end after events. An end
+/// that delivered nothing is a failure, and from the second one in a row on the resubscribe waits
+/// on a backoff schedule: a feed that keeps failing must not spin, but it is never given up on.
+/// Any delivered event starts the count again.
+#[derive(Debug, Default)]
+pub(super) struct Resubscribe {
+    ends_without_events: u32,
+}
+
+impl Resubscribe {
+    /// An event arrived: the subscription works.
+    pub(super) fn delivered(&mut self) {
+        self.ends_without_events = 0;
+    }
+
+    /// Waits as long as a subscription that ended calls for before it is opened again (`lagged`:
+    /// it ended because it fell behind).
+    pub(super) async fn after_end(&mut self, lagged: bool) {
+        if lagged {
+            return;
+        }
+        self.ends_without_events = self.ends_without_events.saturating_add(1);
+        if self.ends_without_events > 1 {
+            let shift = (self.ends_without_events - 1).min(10);
+            tokio::time::sleep(Duration::from_millis(10u64 << shift)).await;
+        }
+    }
+}
+
+/// The local feed's loop: every event of `host.sessions` goes into the fleet, from the
+/// subscription `subscribe` opens (given the last cursor delivered). Runs until the process
+/// ends. Generic over the stream so the policy can be tested with scripted subscriptions.
+async fn run_local_feed<S>(
+    fleet: Fleet,
+    host: HostId,
+    mut subscribe: impl FnMut(Option<String>) -> S,
+) where
+    S: Stream<Item = Result<(String, HostEvent), StreamEnd>> + Unpin,
+{
+    let mut last: Option<String> = None;
+    let mut resume = Resubscribe::default();
+    loop {
+        let mut s = subscribe(last.clone());
+        let mut lagged = false;
+        while let Some(item) = s.next().await {
+            match item {
+                Ok((c, ev)) => {
+                    resume.delivered();
+                    last = Some(c);
+                    fleet.send(Input::Feed(host.clone(), ev)).await;
+                }
+                Err(StreamEnd::Lagged) => {
+                    feed_record(&host, FeedEvent::Lagged, None);
+                    lagged = true;
+                    break;
+                }
+                Err(StreamEnd::Error(e)) => {
+                    // The feed resubscribes; the text is the runtime's.
+                    feed_record(&host, FeedEvent::Ended, Some(diag::foreign("stream", &e)));
+                    break;
+                }
+            }
+        }
+        resume.after_end(lagged).await;
+    }
+}
+
 impl Fleet {
     pub fn spawn() -> Fleet {
         let (tx, mut rx) = mpsc::channel(INPUT_QUEUE);
@@ -498,33 +568,18 @@ impl Fleet {
     pub fn feed_local(&self, host: HostId, manager: SessionManager) -> tokio::task::JoinHandle<()> {
         let fleet = self.clone();
         tokio::spawn(async move {
-            let mut last: Option<String> = None;
-            let mut failures = 0u32;
             feed_record(&host, FeedEvent::Started, None);
-            loop {
-                let mut s = manager.subscribe_host(last.as_deref());
-                while let Some(item) = s.next().await {
-                    match item {
-                        Ok((c, ev)) => {
-                            failures = 0;
-                            last = Some(c);
-                            fleet.send(Input::Feed(host.clone(), ev)).await;
-                        }
-                        Err(StreamEnd::Lagged) => {
-                            feed_record(&host, FeedEvent::Lagged, None);
-                            break;
-                        }
-                        Err(StreamEnd::Error(e)) => {
-                            // The feed resubscribes below; the text is the runtime's.
-                            feed_record(&host, FeedEvent::Ended, Some(diag::foreign("stream", &e)));
-                            break;
-                        }
-                    }
-                }
-                failures = failures.saturating_add(1);
-                // Backoff schedule for a feed that keeps failing.
-                tokio::time::sleep(Duration::from_millis(10u64 << failures.min(10))).await;
-            }
+            let subscribe = move |from: Option<String>| {
+                stream::unfold(
+                    manager.subscribe_host(from.as_deref()),
+                    |mut s| async move {
+                        let item = s.next().await?;
+                        Some((item, s))
+                    },
+                )
+                .boxed()
+            };
+            run_local_feed(fleet, host, subscribe).await
         })
     }
 
@@ -603,5 +658,72 @@ impl Fleet {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::stream::BoxStream;
+    use futures::FutureExt;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    type Item = Result<(String, HostEvent), StreamEnd>;
+
+    #[tokio::test]
+    async fn a_lag_and_the_first_end_after_events_resume_at_once() {
+        let mut r = Resubscribe::default();
+        assert!(r.after_end(true).now_or_never().is_some());
+        assert!(r.after_end(true).now_or_never().is_some());
+        r.delivered();
+        assert!(r.after_end(false).now_or_never().is_some());
+    }
+
+    #[tokio::test]
+    async fn ends_that_deliver_nothing_back_off_from_the_second_on() {
+        let mut r = Resubscribe::default();
+        assert!(r.after_end(false).now_or_never().is_some(), "first end");
+        assert!(
+            r.after_end(false).now_or_never().is_none(),
+            "second end waits"
+        );
+        r.delivered();
+        assert!(
+            r.after_end(false).now_or_never().is_some(),
+            "counted from zero again"
+        );
+    }
+
+    /// Every subscription lags at once, 50 times over; the 51st waits for an event. Each lag must
+    /// reopen the subscription without a pause: a pause per lag (doubling) would take far longer
+    /// than the bound.
+    #[tokio::test]
+    async fn lags_resubscribe_without_sleeping() {
+        const LAGS: usize = 50;
+        let (tx, mut opened) = tokio::sync::mpsc::unbounded_channel::<usize>();
+        let count = Arc::new(Mutex::new(0usize));
+        let subscribe = move |_from: Option<String>| -> BoxStream<'static, Item> {
+            let mut n = count.lock().unwrap();
+            *n += 1;
+            let _ = tx.send(*n);
+            if *n <= LAGS {
+                stream::iter(vec![Err(StreamEnd::Lagged)]).boxed()
+            } else {
+                stream::pending().boxed()
+            }
+        };
+        let feed = tokio::spawn(run_local_feed(Fleet::spawn(), HostId::new("h"), subscribe));
+        let reached = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(n) = opened.recv().await {
+                if n == LAGS + 1 {
+                    return n;
+                }
+            }
+            0
+        })
+        .await;
+        feed.abort();
+        assert_eq!(reached, Ok(LAGS + 1), "resubscribes after lags were paused");
     }
 }

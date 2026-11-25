@@ -18,8 +18,8 @@ use marsad_store::Store;
 use tokio_util::sync::CancellationToken;
 use wasit_control::{
     connector, BindError, ClientOptions, ConnConfig, ControlClient, ControlServer, Endpoint, Hello,
-    Hub, HubConfig, InstanceLock, LinkGate, LockError, RoutingService, Service, ServiceMux,
-    Supervised, SupervisedOptions, Uplink,
+    Hub, HubConfig, LinkGate, LockError, RoutingService, Service, ServiceMux, Supervised,
+    SupervisedOptions, Uplink,
 };
 use wasit_core::DriverId;
 use wasit_diag::{HomePath, Ident};
@@ -941,43 +941,21 @@ async fn stop_daemon(o: &Options) -> Stopped {
     let _ = client
         .request::<marsad_proto::Ack>(methods::DAEMON_SHUTDOWN, (), Duration::from_secs(10))
         .await;
-    if tokio::time::timeout(Duration::from_secs(10), client.closed())
-        .await
-        .is_err()
-    {
-        return Stopped::new(
-            fail("the daemon did not close the connection", 1),
-            StopOutcome::NotClosed,
-            legacy_stopped,
-        );
-    }
+    // No deadline: a daemon slow to close or to exit is waited for, never given up on. The lock
+    // is what says it has exited; it is released by the process's exit, whenever that comes.
+    // Progress goes to stderr so that stdout keeps its one line per outcome. Ctrl-C (or dropping
+    // this future) ends the wait; the daemon is not affected by it.
+    eprintln!("waiting for the previous daemon to exit");
+    client.closed().await;
     let lock = wasit_control::lock_path_for(&o.socket_path());
-    let mut delay = Duration::from_millis(2);
-    for _ in 0..14 {
-        match InstanceLock::try_acquire(&lock).await {
-            Ok(l) => {
-                drop(l);
-                println!("stopped");
-                return Stopped::new(ExitCode::SUCCESS, StopOutcome::Stopped, legacy_stopped);
-            }
-            Err(LockError::Held(_)) => {
-                // Backoff schedule while the process exits.
-                tokio::time::sleep(delay).await;
-                delay = (delay * 2).min(Duration::from_millis(500));
-            }
-            Err(e) => {
-                return Stopped {
-                    error: Some(diag::ours("lock", &e)),
-                    ..Stopped::new(fail(&e, 1), StopOutcome::LockError, legacy_stopped)
-                };
-            }
-        }
+    if let Err(e) = crate::migrate::wait_free(&lock).await {
+        return Stopped {
+            error: Some(diag::ours("lock", &e)),
+            ..Stopped::new(fail(&e, 1), StopOutcome::LockError, legacy_stopped)
+        };
     }
-    Stopped::new(
-        fail("the daemon did not exit", 1),
-        StopOutcome::NotExited,
-        legacy_stopped,
-    )
+    println!("stopped");
+    Stopped::new(ExitCode::SUCCESS, StopOutcome::Stopped, legacy_stopped)
 }
 
 /// The `SSH_ASKPASS` helper: forward `prompt` to the hub (which shows it to the user) and

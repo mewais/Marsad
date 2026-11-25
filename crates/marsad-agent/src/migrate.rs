@@ -56,9 +56,44 @@ pub async fn stop_endpoint(ep: &Endpoint) -> bool {
     let _ = client
         .request::<marsad_proto::Ack>(methods::DAEMON_SHUTDOWN, (), Duration::from_secs(10))
         .await;
-    // Bounded: a daemon that keeps the connection open is reported by the lock wait below.
-    let _ = tokio::time::timeout(Duration::from_secs(10), client.closed()).await;
+    // No deadline: a daemon slow to exit is waited for; the caller waits on its lock next.
+    client.closed().await;
     true
+}
+
+/// Wait, with no deadline, until no process holds the instance lock at `path`.
+///
+/// The holder is a daemon that is exiting (or an earlier build of one), and it releases the lock
+/// when it exits: that release is the event waited for, a blocking shared `flock`, so there is no
+/// timer and no polling, and a slow exit is never given up on. The lock is released again at
+/// once; a caller that needs to hold it takes it with `InstanceLock::try_acquire` and waits again
+/// if another process took it first. No lock file means there is nothing to wait for.
+///
+/// The `flock` blocks a thread of its own, not a task on the runtime's blocking pool: the runtime
+/// waits for its blocking work when it shuts down, so a holder that never released would keep a
+/// cancelled caller's process from ending. A detached thread is ended by the process's exit, and
+/// dropping the returned future (Ctrl-C, a caller giving up) abandons the wait at once.
+pub(crate) async fn wait_free(path: &Path) -> std::io::Result<()> {
+    let path = path.to_owned();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("marsad-lock-wait".into())
+        .spawn(move || {
+            let _ = tx.send(lock_released(&path));
+        })?;
+    rx.await
+        .map_err(|_| std::io::Error::other("the lock wait ended without an answer"))?
+}
+
+/// The blocking half of [`wait_free`]: returns once a shared lock on `path` is granted.
+fn lock_released(path: &Path) -> std::io::Result<()> {
+    let file = match std::fs::OpenOptions::new().read(true).open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    file.lock_shared()?;
+    file.unlock()
 }
 
 /// What happened (for logs and tests).
@@ -204,17 +239,24 @@ async fn take_legacy_lock(path: &Path) -> Option<InstanceLock> {
     }
 }
 
+/// The legacy lock once it is free and taken, waiting as long as the stopped daemon takes to
+/// exit (see [`wait_free`]). `None` when it cannot be taken at all.
 async fn wait_legacy_lock(path: &Path) -> Option<InstanceLock> {
-    let mut delay = Duration::from_millis(5);
-    for _ in 0..12 {
-        if let Some(l) = take_legacy_lock(path).await {
-            return Some(l);
+    loop {
+        if let Err(e) = wait_free(path).await {
+            hub_events::migrate_legacy_lock_failed(&e);
+            return None;
         }
-        // Backoff schedule while the stopped daemon exits.
-        tokio::time::sleep(delay).await;
-        delay = (delay * 2).min(Duration::from_millis(500));
+        match InstanceLock::try_acquire(path).await {
+            Ok(l) => return Some(l),
+            // Another process took it between the two requests: wait for that one to go too.
+            Err(LockError::Held(_)) => continue,
+            Err(e) => {
+                hub_events::migrate_legacy_lock_failed(&e);
+                return None;
+            }
+        }
     }
-    None
 }
 
 /// Whether a legacy session directory belongs to this machine (see the module docs):
@@ -255,5 +297,57 @@ async fn link_runtime(layout: &Layout, name: &str, data: &Path) {
         if let Err(e) = tokio::fs::symlink(data.join(f), run.join(f)).await {
             hub_events::migrate_runtime_link_failed(&name, f, &e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// A holder that releases the lock several seconds after the wait began, as a daemon that is
+    /// slow to exit does. The wait returns only after that release, with no deadline in between.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_free_waits_for_a_slow_exiting_holder() {
+        let dir = std::env::temp_dir().join(format!("mrs-wait-free-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("marsad.sock.lock");
+        let holder = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        holder.lock().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(4));
+            holder.unlock().unwrap();
+        });
+        let began = Instant::now();
+        wait_free(&path)
+            .await
+            .expect("the wait ends once the holder releases");
+        assert!(
+            began.elapsed() >= Duration::from_secs(3),
+            "returned before the holder released: {:?}",
+            began.elapsed()
+        );
+        // Free now: the lock can be taken.
+        let taken = InstanceLock::try_acquire(&path).await;
+        assert!(taken.is_ok(), "lock still held after the wait");
+        drop(taken);
+        release.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No lock file: nothing to wait for.
+    #[tokio::test]
+    async fn wait_free_without_a_lock_file_returns_at_once() {
+        let dir = std::env::temp_dir().join(format!("mrs-no-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("absent.lock");
+        assert!(wait_free(&path).await.is_ok());
+        assert!(!path.exists(), "the wait must not create the lock file");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
