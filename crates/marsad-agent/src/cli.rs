@@ -5,6 +5,7 @@
 //! marsad-agent bridge [same options]      (starts `serve` with them if no daemon runs)
 //! marsad-agent stop   [--data <dir>] [--socket <path>]
 //! marsad-agent shim   <wasit-shim arguments>
+//! marsad-agent kilo-bridge -- <cli argv>   (the wrapper a Kilo session's process runs through)
 //! marsad-agent mcp
 //! marsad-agent --version
 //! ```

@@ -53,6 +53,17 @@ fn main() -> ExitCode {
         let code = wasit_shim::run(rest);
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
+    // A driver's wrapper (the bridge of a Kilo session): the sessions this host starts launch it.
+    // The arguments after the subcommand (`args` is consumed below): argv[0] and `cmd` skipped.
+    if let Some(code) = cmd.to_str().and_then(|name| {
+        let rest: Option<Vec<String>> = std::env::args_os()
+            .skip(2)
+            .map(|a| a.into_string().ok())
+            .collect();
+        wasit_runtime::run_wrapper(name, &rest?)
+    }) {
+        return code;
+    }
     match cmd.to_str() {
         Some("--version") | Some("-V") | Some("version") => {
             match serde_json::to_string(&version::info()) {
