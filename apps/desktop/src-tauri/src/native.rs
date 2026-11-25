@@ -1,8 +1,9 @@
 //! Native-only `desktop.*` methods of the `rpc` bridge: open a link or path with the OS,
 //! reveal a path in the file manager, pick a folder, set the window background (`surface`),
 //! pick files to attach and read them (only files the user picked), save downloads into
-//! the Downloads folder (only files this shell created there), and save an exported
-//! diagnostics file where the user says (`export_save`).
+//! the Downloads folder (only files this shell created there), save a file the user names
+//! (`download_choose`, then chunks as for downloads), and save an exported diagnostics file
+//! where the user says (`export_save`).
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -145,6 +146,24 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
             files::download_begin(&dir, &a.name).await
         }
         "download_chunk" => files::download_chunk(args(p)?).await,
+        "download_choose" => {
+            // The name the dialog suggests is the file name alone: no directories from the caller.
+            let a: files::DownloadChoose = args(p)?;
+            let name = a
+                .name
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or("download")
+                .to_string();
+            let dir = tauri::Manager::path(app)
+                .download_dir()
+                .or_else(|_| tauri::Manager::path(app).temp_dir())
+                .map_err(|e| BridgeError::new("io", e.to_string()))?;
+            match exports::ask(app, Some(dir), name).await? {
+                Some(path) => files::download_create(path).await,
+                None => Ok(serde_json::json!({ "saved": false })),
+            }
+        }
         "export_save" => exports::save(app, args(p)?).await,
         "window_surface" => crate::surface::window_surface(app, args(p)?).await,
         other => Err(BridgeError::new(
@@ -246,7 +265,7 @@ mod exports {
     }
 
     /// The Save dialog, defaulting to `dir` and `name`; `None` when the user cancels.
-    async fn ask(
+    pub async fn ask(
         app: &AppHandle,
         dir: Option<PathBuf>,
         name: String,
@@ -552,6 +571,20 @@ mod files {
     }
 
     #[derive(Deserialize)]
+    pub struct DownloadChoose {
+        pub name: String,
+    }
+
+    /// `desktop.download_choose`: the file the user picked in the Save dialog, created empty (a
+    /// file already there is replaced; the dialog has asked) and registered, so the chunks of
+    /// `download_chunk` may be appended to it.
+    pub async fn download_create(path: PathBuf) -> Result<Value, BridgeError> {
+        tokio::fs::File::create(&path).await.map_err(io)?;
+        set(&DOWNLOADS).insert(path.clone());
+        Ok(json!({ "path": path.to_string_lossy() }))
+    }
+
+    #[derive(Deserialize)]
     pub struct DownloadChunk {
         path: String,
         data: String,
@@ -622,6 +655,34 @@ mod files {
             .await
             .unwrap();
             assert_eq!(r["data"], "aQ==");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[tokio::test]
+        async fn a_chosen_save_file_starts_empty_and_takes_the_chunks_in_order() {
+            let dir = std::env::temp_dir().join(format!("marsad-choose-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let chosen = dir.join("conversation.md");
+            std::fs::write(&chosen, b"old contents that must go").unwrap();
+            let made = download_create(chosen.clone()).await.unwrap();
+            let path = made["path"].as_str().unwrap().to_string();
+            assert_eq!(std::fs::read(&path).unwrap(), b"");
+            for data in ["aGk=", "IQ=="] {
+                download_chunk(DownloadChunk {
+                    path: path.clone(),
+                    data: data.into(),
+                })
+                .await
+                .unwrap();
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), b"hi!");
+            // A path no dialog answered for is refused, as for `download_begin`.
+            assert!(download_chunk(DownloadChunk {
+                path: dir.join("other.md").to_string_lossy().into(),
+                data: "aGk=".into(),
+            })
+            .await
+            .is_err());
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

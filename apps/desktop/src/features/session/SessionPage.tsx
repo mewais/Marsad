@@ -11,6 +11,7 @@ import { ContinueButton } from "../common/SessionBits";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { CompactButton, ForkButton } from "./SessionActions";
+import { ExportConversation } from "./ExportDialog";
 import { ForkedBanner } from "./ForkedBanner";
 import { MediaCtx } from "../media/Parts";
 import { SessionFacts } from "./SessionFacts";
@@ -147,6 +148,7 @@ export function SessionPage({ host, id, tab: tabParam, sub }: { host: string; id
               <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
             </>
           )}
+          <ExportConversation key={key} host={host} session={id} name={v.name} blocked={reach} />
         </div>
         {cont.kind === "blocked" ? <div className="sd-ended" role="status" data-testid="continue-why"><Icon name="stop" size="sm" />{notContinuableWords(cont.why)}</div> : null}
         <div className="sd-meta">

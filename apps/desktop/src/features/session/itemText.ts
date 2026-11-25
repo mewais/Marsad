@@ -102,6 +102,8 @@ export function quotableText(row: RowItem): string {
       return row.text;
     case "media":
       return row.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n\n");
+    case "shell":
+      return shellMarkdown(row);
     default:
       return "";
   }

@@ -5,15 +5,17 @@ import type {
   FileReadRequest,
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateReason, GateRequest, GitCommitRequest, GitDiffRequest,
-  GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SignInRepeat, SessionSnapshot, CommandRequest,
+  GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, SearchRequest, HostId, InventoryRequest, LinkState, SessionRef, SignInRepeat, SessionSnapshot, CommandRequest,
   HostEnvironment, HostEnvSettings, HostRef, UiEvent, ExportRequest, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
   PtyInputRequest, PtyRef, PtyResizeRequest, PtyStartRequest, PtyEvent,
+  SessionExportRequest, ExportRef, ExportReadRequest,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import pkg from "../../../package.json";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
 import { advanceEarlier, failEarlier, historyRounds, journalEarlier, type HistoryItem } from "./earlier";
 import { FixtureExports } from "./exports";
+import { FixtureSessionExports } from "./sessionExport";
 import { FixtureLog, scriptedTrail, seedHost, seedHub, trailOf } from "./diagnostics";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
@@ -26,6 +28,7 @@ import { FixtureFiles, MEDIA_SPEC } from "./media";
 import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
 import { SPAWN_REQUEST } from "./workstreams";
 import { historyAdmits } from "./work";
+import { searchFixture } from "./search";
 
 export interface FixtureOptions {
   /** Background chatter (timers): live tool calls, reconnect countdown, a session finishing. Default true. */
@@ -83,6 +86,12 @@ export class FixtureBackend implements Backend {
   exportSaveAnswer: (id: string) => ExportSaved = (id) => ({ path: `/home/me/Downloads/${id}` });
   /** The hub's diagnostics exports (`diagnostics.export.start`, topic `diagnostics.exports`). */
   readonly exports: FixtureExports;
+  /** A session's conversation exports, written on its host (`session.export.*`, topic `session.export:<id>`). */
+  readonly sessionExports: FixtureSessionExports;
+  /** What `desktop.download_choose` answers (tests set `{ saved: false }` for a cancelled Save dialog). */
+  saveAsAnswer: (name: string) => ExportSaved = (name) => ({ path: `/home/me/Downloads/${name}` });
+  /** The files the shell was given chunks for (`desktop.download_chunk`), by path, as base64 chunks in order. */
+  readonly downloads = new Map<string, string[]>();
   /** How far each host's wall clock is ahead of this computer's, in ms (what `diag.sources` reveals to a reader that measures it). */
   readonly hostClockSkew: Record<HostId, number> = {};
   readonly sim: SessionSim;
@@ -124,6 +133,15 @@ export class FixtureBackend implements Backend {
       now: this.opts.now,
       hosts: () => [...this.hosts.values()].map((h) => ({ id: h.def.entry.id, up: this.isUp(h), link: h.def.link })),
       after: (ms, fn) => this.later(ms * this.opts.speed, fn),
+    });
+    this.sessionExports = new FixtureSessionExports({
+      now: this.opts.now,
+      after: (ms, fn) => this.later(ms * this.opts.speed, fn),
+      deliver: (fn) => this.deliver(fn),
+      title: (host, session) => {
+        const snap = this.hosts.get(host)?.sessions.get(session)?.snap;
+        return snap?.display_name ?? snap?.title ?? session;
+      },
     });
     this.sim = new SessionSim({
       now: this.opts.now,
@@ -295,6 +313,8 @@ export class FixtureBackend implements Backend {
         off();
       };
     }
+    const exportTopic = /^session\.export:(.+)$/.exec(topic);
+    if (exportTopic) return this.sessionExports.attach(opts.host, exportTopic[1], opts.from, (e) => onEvent(e), ended);
     if (topic === T.DIAG_TAIL) {
       const rec = opts.host ? this.hosts.get(opts.host) : undefined;
       const log = opts.host ? this.hostLog(opts.host) : this.hubLog;
@@ -406,6 +426,15 @@ export class FixtureBackend implements Backend {
     if (!this.isUp(host)) throw err("upstream", `${host.def.entry.name} is not connected; try again once it is back.`);
     const now = this.opts.now();
     switch (method) {
+      case M.SESSION_EXPORT_START: {
+        const r = p as SessionExportRequest;
+        this.entry(host, { id: r.session });
+        return this.sessionExports.start(hostId, r);
+      }
+      case M.SESSION_EXPORT_CANCEL:
+        return this.sessionExports.cancel(hostId, (p as ExportRef).export_id);
+      case M.SESSION_EXPORT_READ:
+        return this.sessionExports.read(hostId, p as ExportReadRequest);
       case M.HOST_INFO:
         return { host_id: hostId, build: "fixture", pid: 4242, started_at_ms: now - 86_400_000, data_dir: "~/.local/share/marsad", os: host.def.entry.platform?.os ?? "linux", arch: host.def.entry.platform?.arch ?? "x86_64",
           drivers: DRIVERS.filter((d) => host.def.drivers[d.id]).map(({ id, display_name, capabilities, prompt_input }) => ({ id, display_name, capabilities, prompt_input })) };
@@ -431,6 +460,12 @@ export class FixtureBackend implements Backend {
         const all = (r.earlier ? entry.earlier ?? [] : entry.events).filter((e) => (r.before == null || e.cursor < r.before) && historyAdmits(scope, e));
         const page = tailPage(all, r.limit, r.max_bytes);
         return { events: page.items, has_more: page.has_more };
+      }
+      case M.SESSION_SEARCH: {
+        // The derived log only (never starts an actor): the session's own events, or its earlier history when `part` names it.
+        const r = p as SearchRequest;
+        const entry = this.entry(host, { id: r.session });
+        return searchFixture(r.part === "earlier" ? entry.earlier ?? [] : entry.events, r);
       }
       case M.SESSION_TRAIL_PAGE: {
         const r = p as TrailRequest;
@@ -573,6 +608,18 @@ export class FixtureBackend implements Backend {
     if (method === "desktop.open" || method === "desktop.reveal") return null;
     if (method === "desktop.export_save") return this.exportSaveAnswer((p as { id: string }).id);
     if (method === M.DIAGNOSTICS_EXPORT_START) return this.exports.start(p as ExportRequest);
+    if (method === "desktop.download_choose") {
+      const r = this.saveAsAnswer((p as { name: string }).name);
+      if ("path" in r) this.downloads.set(r.path, []);
+      return r;
+    }
+    if (method === "desktop.download_chunk") {
+      const { path, data } = p as { path: string; data: string };
+      const chunks = this.downloads.get(path);
+      if (!chunks) throw err("forbidden", "not a download started by this window");
+      chunks.push(data);
+      return null;
+    }
     if (method === M.FLEET_GIT_REFRESH) {
       const r = p as GitRefresh;
       const e = [...(this.hosts.get(r.host)?.sessions.values() ?? [])].find((x) => x.snap.cwd === r.cwd);

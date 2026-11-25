@@ -18,7 +18,7 @@ import { TranscriptCtx, type TranscriptScopeInfo } from "./transcriptContext";
 import { MessageMenu } from "./MessageMenu";
 import { diffPartsOf, turnWords, type DiffPart } from "./itemText";
 import { useOpenRow } from "./expansion";
-import { deliveryNote, resultText, toolArg, type Item, type Part, type ThinkingItem, type ToolItem, type TurnItem } from "./transcript";
+import { deliveryNote, resultText, toolArg, type Item, type Part, type ShellItem, type ThinkingItem, type ToolItem, type TurnItem } from "./transcript";
 import type { RowItem, ToolRunItem } from "./toolRuns";
 
 const DIFF_CAP = 2000;
@@ -202,6 +202,32 @@ function SubagentCard({ item, info, scope }: { item: ToolItem; info?: SubagentIn
 }
 
 /**
+ * A shell command the session ran: its command and folder, and how it ended, in one row; opened, its output (monospace, the end of
+ * it is kept by the host only up to its cap, which is said). Its open state is kept in the transcript's expansion like any row's.
+ */
+const ShellRow = memo(function ShellRow({ item }: { item: ShellItem }) {
+  const [open, toggle] = useOpenRow(`shell:${item.key}`);
+  const exited = item.exitCode !== undefined;
+  const tone = !exited ? "c-needs" : item.exitCode === 0 ? "c-done" : "c-failed";
+  return (
+    <div className="shell-row" data-testid="shell-row">
+      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={toggle}>
+        <span className="faint">$</span> <span className="nm">{item.command}</span>
+        {item.cwd ? <span className="shell-row-cwd" title={item.cwd}>{item.cwd}</span> : null}
+        <span data-testid="shell-exit" className={tone}>{exited ? `exit ${item.exitCode}` : "stopped"}</span>
+        <Icon name={open ? "chev" : "chevr"} size="xs" className="faint" />
+      </button>
+      {open ? (
+        <>
+          <pre data-testid="shell-output">{item.output || "(no output)"}</pre>
+          {item.outputTruncated ? <div className="shell-truncated" data-testid="shell-truncated">Output truncated: the host kept only the first part.</div> : null}
+        </>
+      ) : null}
+    </div>
+  );
+});
+
+/**
  * The model's reasoning, shown as the markdown it is written in, muted and under the row that opens it. Raw HTML in it is text
  * (see Markdown), so reasoning that quotes markup shows the markup and runs nothing.
  */
@@ -290,6 +316,8 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
       return item.subagent ? <Subagent item={item} /> : <Tool item={item} />;
     case "toolrun":
       return <ToolRun item={item} />;
+    case "shell":
+      return <ShellRow item={item} />;
     case "notice":
       return item.tone === "warn" ? (
         <div className="fs12 c-needs" role="status"><Icon name="warn" size="xs" /> {item.text}</div>

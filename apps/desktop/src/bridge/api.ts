@@ -49,6 +49,7 @@ export interface MethodMap {
   [M.SESSIONS_RENAME]: [W.RenameSession, W.Ack];
   [M.FLEET_GIT_REFRESH]: [W.GitRefresh, W.Ack];
   [M.SESSION_HISTORY]: [W.HistoryRequest, W.HistoryPage];
+  [M.SESSION_SEARCH]: [W.SearchRequest, W.SearchPage];
   [M.SESSION_TRAIL_PAGE]: [W.TrailRequest, W.TrailPage];
   [M.SESSION_COMMAND]: [W.CommandRequest, W.CommandReply];
   [M.SESSION_ATTACHMENT_PUT]: [W.AttachmentPut, W.AttachmentPutReply];
@@ -82,6 +83,9 @@ export interface MethodMap {
   [M.HOSTS_ENVIRONMENT_TEST]: [W.HostRef, W.EnvironmentTest];
   [M.HOSTS_ENVIRONMENT_SECRETS]: [void, W.SecretsLocation];
   [M.DIAGNOSTICS_EXPORT_START]: [W.ExportRequest, W.ExportStarted];
+  [M.SESSION_EXPORT_START]: [W.SessionExportRequest, W.SessionExportStarted];
+  [M.SESSION_EXPORT_CANCEL]: [W.ExportRef, W.Ack];
+  [M.SESSION_EXPORT_READ]: [W.ExportReadRequest, W.ExportChunk];
   [M.DIAG_SOURCES]: [void, W.DiagSources];
   [M.AGENTCONFIG_EFFECTIVE]: [W.EffectiveRequest, W.EffectiveConfig];
   [M.SESSIONS_LAUNCH]: [W.LaunchRequest, W.LaunchReply];
@@ -138,6 +142,8 @@ export function createApi(b: Backend) {
     /** `trace`: the id of the user action this command serves (see `RequestOptions.trace`). */
     command: (host: W.HostId, id: W.SessionId, command: W.Command, trace?: string) => call(b, M.SESSION_COMMAND, { id, command }, { host, trace }),
     history: (host: W.HostId, r: W.HistoryRequest) => call(b, M.SESSION_HISTORY, r, { host }),
+    /** One page of the hits of a query in a session's event log (derived, read only; see `SearchRequest`). */
+    search: (host: W.HostId, r: W.SearchRequest) => call(b, M.SESSION_SEARCH, r, { host }),
     /** The session's trail (content-free facts, in the host's order), the newest `limit` before `before`. */
     trailPage: (host: W.HostId, r: W.TrailRequest) => call(b, M.SESSION_TRAIL_PAGE, r, { host }),
     /** Fork a session on its host: a new session that copies its conversation; the parent is left unchanged. */
@@ -170,12 +176,30 @@ export function createApi(b: Backend) {
       pickFiles: (title?: string) => b.request<{ files: PickedFile[] }>("desktop.pick_files", { title: title ?? null }),
       readPicked: (path: string, offset: number, length: number) => b.request<{ data: string; eof: boolean }>("desktop.read_picked", { path, offset, length }),
       downloadBegin: (name: string) => b.request<{ path: string }>("desktop.download_begin", { name }),
+      /**
+       * Ask where to save a file (the OS "Save as" dialog, suggesting `name`): `{path}` of a new file to append
+       * `downloadChunk` data to, or `{saved: false}` when the user cancels.
+       */
+      chooseSave: (name: string) => b.request<ExportSaved>("desktop.download_choose", { name }),
       downloadChunk: (path: string, data: string) => b.request<null>("desktop.download_chunk", { path, data }),
       /**
        * Save a diagnostics export the hub made (`id`: its file name, from the `diagnostics.exports`
        * topic) where the user chooses, through the OS "Save as" dialog; `{saved: false}` when they cancel.
        */
       exportSave: (id: string) => b.request<ExportSaved>("desktop.export_save", { id }),
+    },
+    /**
+     * A session's conversation export, written on the session's host (`session.export.*`). Progress is on
+     * `sessionExport.events`; a finished file is read in chunks by `read`.
+     */
+    sessionExport: {
+      start: (host: W.HostId, r: W.SessionExportRequest) => call(b, M.SESSION_EXPORT_START, r, { host }),
+      /** Stops a running export; a finished one is left as it is. */
+      cancel: (host: W.HostId, exportId: string) => call(b, M.SESSION_EXPORT_CANCEL, { export_id: exportId }, { host }),
+      read: (host: W.HostId, r: W.ExportReadRequest) => call(b, M.SESSION_EXPORT_READ, r, { host }),
+      /** From the first event (the topic replays), then live; the export's events end with `done` or `failed`. */
+      events: (host: W.HostId, exportId: string, cb: (e: W.ExportEvent) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(`${topicPrefixes.SESSION_EXPORT}${exportId}`, { host }, (e) => cb(e as W.ExportEvent), onEnd),
     },
     /** A shell command on a host, in a folder there (`host.exec.*`). The output is `exec.output`. */
     exec: {

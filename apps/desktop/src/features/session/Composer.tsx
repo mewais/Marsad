@@ -7,7 +7,7 @@ import { modelChoice } from "../../state/domain";
 import { Button, Icon, IconButton, Kbd, Select, useEscape } from "../../ui";
 import { formatBytes } from "../media/fetch";
 import { batchProblem, fromFile, fromPicked, handling, promptFiles, type PendingFile } from "./attachments";
-import { clearDraft, peekDraft } from "./draft";
+import { appendQuote, clearDraft, onQuote, peekDraft } from "./draft";
 import { usePromptRecall } from "./usePromptRecall";
 import { inShell } from "../../lib/shell";
 import { ShellRunPanel, shellRunsFor, useShellRun } from "./ShellRun";
@@ -103,6 +103,11 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
         : "Attach images or files — or paste / drop them here";
   const [active, setActive] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
+  // A quote from a row's ⋯ menu goes into this composer's text while it is open, and the box takes the focus.
+  useEffect(() => onQuote(sessionKey, (q) => {
+    setText((t) => appendQuote(t, q));
+    ta.current?.focus();
+  }), [sessionKey]);
   const promptPending = usePending(`cmd:${sessionKey}:prompt`);
   const slashPending = usePending(`cmd:${sessionKey}:run_slash`);
   const shellPending = usePending(`cmd:${sessionKey}:run_shell`);
