@@ -40,6 +40,7 @@ export function nextAtMs(l: Extract<LinkState, { state: "reconnecting" }>): numb
 
 const PROBLEM: Record<string, string> = {
   auth_needed: "Sign-in did not succeed",
+  connection_lost: "Connection lost",
   host_key_unknown: "Host key not trusted yet",
   host_key_changed: "Host key changed",
   unreachable: "Unreachable",

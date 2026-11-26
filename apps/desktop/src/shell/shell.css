@@ -19,7 +19,12 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 .statusbar .sp{flex:1}
 /* The app's own connection: one strip above the page. */
 .banner{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.45;flex:none}
+.banner>.i{flex:none}
 .banner .bt{flex:1;min-width:0}
+.banner.signin-strip{flex-wrap:wrap;gap:8px 10px}
+.banner.signin-strip .bt{flex:1 1 260px;min-width:0}
+.banner-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:auto;max-width:100%}
+.banner-acts .btn{max-width:220px}
 .banner.info{background:var(--working-bg);border-color:var(--working-line);color:var(--working)}
 .banner.warn{background:var(--needs-bg);border-color:var(--needs-line);color:var(--needs)}
 .banner.bad{background:var(--failed-bg);border-color:var(--failed-line);color:var(--failed)}

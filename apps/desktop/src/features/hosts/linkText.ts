@@ -9,6 +9,8 @@ export function linkSub(link: HostLink, now = Date.now()): string {
   switch (l.state) {
     case "connected":
       return `helper ${l.hello.build}`;
+    case "connecting":
+      return l.stage || "Connecting…";
     case "reconnecting":
       return `attempt ${l.attempt} · ${l.last_error}`;
     case "provisioning":

@@ -13,8 +13,8 @@ export function SignInButton({ host, label = "Sign in", variant = "primary" }: {
   const busy = !!usePending(reconnectPendingKey(host.id));
   const reach = useReach();
   return (
-    <Button size="sm" variant={variant} icon="key" pending={busy} blocked={reach} onClick={() => void actions.reconnectHost(host.id, host.name)}>
-      {label}
+    <Button size="sm" variant={variant} icon="key" pending={busy} blocked={reach} title={label} onClick={() => void actions.reconnectHost(host.id, host.name)}>
+      <span className="ell">{label}</span>
     </Button>
   );
 }

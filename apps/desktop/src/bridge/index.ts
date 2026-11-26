@@ -36,5 +36,28 @@ export function createBackend(search = typeof location !== "undefined" ? locatio
   // ?hub=connecting|reconnecting|offline (&hub_error=...) shows the app without its link to the local daemon.
   const hub = q.get("hub");
   if (hub === "connecting" || hub === "reconnecting" || hub === "offline") backend.setHubLink({ state: hub, ...(q.get("hub_error") ? { error: q.get("hub_error")! } : {}) });
+  // ?connecting=1 (or ?connecting=<stage>) sits pi-runner in a connecting stage (default: long helper upload).
+  const conn = q.get("connecting");
+  if (conn) {
+    const stage = conn === "1" ? "Sending the Marsad helper to pi-runner (3145728 of 9437184 bytes)" : conn;
+    backend.setLink("pi", { state: "connecting", stage, since_ms: backend.opts.now() - 42_000 });
+  }
+  // ?waiting=2 puts a second host (hetzner-ax41) into the held sign-in state (for multi-host SignInStrip checks).
+  if (q.get("waiting") === "2") {
+    backend.markInteractive("hz");
+    backend.dropLink("hz", "connection reset by peer");
+  }
+  // ?auth=secret|code|info|confirm|1 sits gpu-box in an active sign-in prompt sequence (during connecting).
+  const auth = q.get("auth");
+  if (auth) {
+    const kind = auth === "code" ? "code" : auth === "info" ? "info" : auth === "confirm" ? "confirm" : "secret";
+    const prompt =
+      kind === "code" ? "Verification code: "
+      : kind === "info" ? "Duo Push sent to “iPhone 15”. Approve the request on your device to continue."
+      : kind === "confirm" ? "The authenticity of host 'gpu-box (10.0.4.21)' can't be established.\nAre you sure you want to continue connecting (yes/no)?"
+      : "ml@10.0.4.21's password: ";
+    backend.setLink("gpu", { state: "connecting", stage: "signing in to the host (opening the shared ssh connection)", since_ms: backend.opts.now() - 18_000 });
+    backend.setAuthPrompt("gpu", { prompt, kind, attempt: 1 });
+  }
   return backend;
 }

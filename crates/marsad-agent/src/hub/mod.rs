@@ -16,6 +16,7 @@ pub mod transport;
 pub mod workstreams;
 mod ws_methods;
 pub mod wsl;
+pub mod wsl_hold;
 
 use std::sync::Arc;
 use std::time::Instant;

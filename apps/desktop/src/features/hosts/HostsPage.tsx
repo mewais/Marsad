@@ -33,8 +33,8 @@ const HostRow = memo(function HostRow({ id, selected, onSelect }: { id: string; 
         }
       }}>
       <span><Icon name={hostIcon(h)} size="lg" /></span>
-      <span className="hn">{h.name}<small>{[osWord(h.os), arch].filter(Boolean).join(" · ") || "Platform not probed yet"} · {h.local ? "Local" : h.where}</small></span>
-      <span className="hst"><ConnState host={h} /><span className="faint sub">{linkSub(h.link, now)}</span>{lv.held ? <SignInButton host={h} /> : null}</span>
+      <span className="hn"><span className="hn-name" title={h.name}>{h.name}</span><small title={`${[osWord(h.os), arch].filter(Boolean).join(" · ") || "Platform not probed yet"} · ${h.local ? "Local" : h.where}`}>{[osWord(h.os), arch].filter(Boolean).join(" · ") || "Platform not probed yet"} · {h.local ? "Local" : h.where}</small></span>
+      <span className="hst"><ConnState host={h} /><span className="faint sub" title={linkSub(h.link, now)}>{linkSub(h.link, now)}</span>{lv.held ? <SignInButton host={h} /> : null}</span>
       <span className="small"><b className="tnum">{n}</b> <span className="faint">session{n === 1 ? "" : "s"}</span></span>
       <span className="clis">
         {!inv ? (

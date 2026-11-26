@@ -58,6 +58,9 @@ struct Asked {
     /// For a host-key confirmation: the user answered it so that ssh trusts the key (see
     /// [`PromptKind::accepts_host_key`]). Set once the answer comes; never for other prompts.
     accepted: bool,
+    /// The user gave an answer (of any kind). Set by [`Prompts::record_answer`]; a prompt that
+    /// was cancelled, timed out or whose helper went away stays unanswered.
+    answered: bool,
 }
 
 /// Everything about one host's prompts: its current connect attempt, the prompt waiting for the
@@ -247,6 +250,7 @@ impl Prompts {
                 kind,
                 text: text.clone(),
                 accepted: false,
+                answered: false,
             });
             let again = h.asked[h.round..].iter().filter(|a| a.text == text).count() as u32;
             if kind.needs_user() {
@@ -335,6 +339,7 @@ impl Prompts {
             if let Some(a) = h.asked.iter_mut().find(|a| a.id == id) {
                 a.accepted =
                     a.kind == PromptKind::Confirm && PromptKind::accepts_host_key(&a.text, answer);
+                a.answered = true;
             }
         }
     }
@@ -394,6 +399,11 @@ impl SignInAttempt {
         self.tag
     }
 
+    /// The host the attempt is for.
+    pub fn host(&self) -> &HostId {
+        &self.host
+    }
+
     /// What the attempt's prompts have come to ([`Asking`]), as a receiver that outlives the
     /// attempt's hold on them: a watcher can wait for the user to be asked without the attempt
     /// (its future may be dropped at any time) having to stay in play.
@@ -419,6 +429,14 @@ impl SignInAttempt {
     /// to a host-key question was, such a prompt is the user's to answer.
     pub fn asked_beyond_host_key(&self) -> bool {
         self.with(|h| h.asked.iter().any(|a| a.kind != PromptKind::Confirm))
+            .unwrap_or(false)
+    }
+
+    /// Whether every prompt the attempt was asked (host-key confirmations included) was answered
+    /// by the user, and at least one was asked: a sign-in the user completed, as far as the
+    /// prompts go. A cancelled, timed-out or unanswered prompt makes it false.
+    pub fn answered_all(&self) -> bool {
+        self.with(|h| !h.asked.is_empty() && h.asked.iter().all(|a| a.answered))
             .unwrap_or(false)
     }
 

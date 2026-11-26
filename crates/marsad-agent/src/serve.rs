@@ -496,6 +496,11 @@ async fn start_hub(
     )));
     let local_id = HostId::new(host_id);
     fleet.feed_links(hub.clone());
+    // A WSL distribution with live sessions keeps a session holder attached (`hub::wsl_hold`).
+    crate::hub::wsl_hold::watch(
+        fleet.clone(),
+        Arc::new(crate::hub::wsl_hold::WslLauncher::new(build)),
+    );
     let local_entry = HostEntry {
         id: local_id.clone(),
         name: host_id.to_string(),

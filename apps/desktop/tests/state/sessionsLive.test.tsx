@@ -66,15 +66,34 @@ describe("sessions_live is the only source of a host's live flag", () => {
 });
 
 describe("a connect in progress names its stage and how long it has run", () => {
-  it("the host's detail and its chip say 'Connecting · <stage> · <elapsed>'", async () => {
+  it("puts the stage on its own line with a tooltip and keeps the chip compact with tabular elapsed time", async () => {
     const backend = quietBackend();
     mountApp("/hosts?h=hz", backend);
-    act(() => backend.setLink("hz", { state: "connecting", stage: "opening ssh", since_ms: Date.now() - 5_000 }));
+    const stage = "Sending the Marsad helper to hetzner-ax41 (3145728 of 9437184 bytes)";
+    act(() => backend.setLink("hz", { state: "connecting", stage, since_ms: Date.now() - 5_000 }));
     const detail = await screen.findByRole("complementary", { name: /details/ });
-    expect(within(detail).getAllByText(/^Connecting · opening ssh · \d+s$/).length).toBeGreaterThan(0);
+    const stageEl = within(detail).getByTestId("connecting-stage");
+    expect(stageEl).toHaveTextContent(stage);
+    expect(stageEl).toHaveAttribute("title", stage);
+    const elapsedEl = within(detail).getByTestId("connecting-elapsed");
+    expect(elapsedEl).toHaveClass("tnum");
+    expect(elapsedEl.textContent).toMatch(/^\d+s$/);
+
+    // Host row shows the stage on its own .sub line with the full text in a tooltip.
+    const row = document.querySelector<HTMLElement>(".hrow[data-host='hz']")!;
+    const sub = row.querySelector<HTMLElement>(".sub")!;
+    expect(sub.textContent).toBe(stage);
+    expect(sub).toHaveAttribute("title", stage);
+
+    // Chips stay compact ("Connecting" + tabular elapsed) and carry the full stage in title.
     const chips = [...document.querySelectorAll<HTMLElement>(".conn[data-link='connecting']")];
     expect(chips.length).toBeGreaterThan(0);
-    for (const c of chips) expect(c.textContent).toMatch(/^Connecting · opening ssh · \d+s$/);
+    for (const c of chips) {
+      expect(c).toHaveAttribute("title", stage);
+      expect(c.querySelector(".conn-word")?.textContent).toBe("Connecting");
+      expect(c.querySelector(".conn-elapsed")?.textContent).toMatch(/^\d+s$/);
+      expect(c.textContent).not.toContain(stage);
+    }
   });
 
   it("falls back to a bare 'Connecting' without a stage", async () => {
@@ -83,8 +102,13 @@ describe("a connect in progress names its stage and how long it has run", () => 
     act(() => backend.setLink("hz", { state: "connecting", since_ms: Date.now() }));
     const detail = await screen.findByRole("complementary", { name: /details/ });
     expect(within(detail).getAllByText("Connecting").length).toBeGreaterThan(0);
+    expect(within(detail).queryByTestId("connecting-elapsed")).toBeNull();
+    expect(within(detail).getByText("Opening the connection.")).toBeInTheDocument();
     const chips = [...document.querySelectorAll<HTMLElement>(".conn[data-link='connecting']")];
     expect(chips.length).toBeGreaterThan(0);
-    for (const c of chips) expect(c.textContent).toBe("Connecting");
+    for (const c of chips) {
+      expect(c.textContent).toBe("Connecting");
+      expect(c.getAttribute("title")).toBeNull();
+    }
   });
 });

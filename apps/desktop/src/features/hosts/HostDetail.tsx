@@ -56,10 +56,17 @@ export function HostDetail({ host }: { host: HostView }) {
       <div className="gate"><div className="gate-h"><Icon name="key" size="sm" />{host.name} has a question for you</div>
         <div className="small">{host.name} asked for {askWords(host.authPrompt.kind)}. {ahead <= 0 ? "Answer it in the sign-in dialog." : `It is asked after ${ahead === 1 ? "one other question" : `${ahead} other questions`} in the sign-in dialog.`}</div></div>
     );
-  } else if (st?.state === "provisioning" || st?.state === "connecting") {
+  } else if (st?.state === "connecting") {
     card = (
-      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{st.state === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} /> : lv.detail}</div>
-        <div className="small">{st.state === "provisioning" ? (st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol.") : "Opening the connection."}</div>
+      <div className="gate info">
+        <ConnectingWords stage={st.stage} since={st.since_ms} fallback="Opening the connection." icon={<Icon name="working" size="sm" spin />} />
+        <div className="bar w indet" aria-hidden="true"><i /></div>
+      </div>
+    );
+  } else if (st?.state === "provisioning") {
+    card = (
+      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{lv.detail}</div>
+        <div className="small">{st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol."}</div>
         <div className="bar w indet" aria-hidden="true"><i /></div></div>
     );
   } else if (host.askBeforeConnecting && st && !lv.connected) {
@@ -99,7 +106,14 @@ export function HostDetail({ host }: { host: HostView }) {
 
   return (
     <aside className="hd" aria-label={`${host.name} details`}>
-      <div className="hd-title"><Icon name={hostIcon(host)} size="lg" /><div><div className="h2">{host.name}</div><div className="faint small">{[osWord(entry?.platform?.os), entry?.platform?.arch, host.local ? "Local" : k?.kind === "ssh" ? "SSH" : "WSL"].filter(Boolean).join(" · ")}</div></div><span className="sp" /><ConnState host={host} /></div>
+      <div className="hd-title">
+        <Icon name={hostIcon(host)} size="lg" />
+        <div className="hd-name">
+          <div className="h2" title={host.name}>{host.name}</div>
+          <div className="faint small">{[osWord(entry?.platform?.os), entry?.platform?.arch, host.local ? "Local" : k?.kind === "ssh" ? "SSH" : "WSL"].filter(Boolean).join(" · ")}</div>
+        </div>
+        <ConnState host={host} />
+      </div>
       {card}
       {host.feedError ? <div className="small" role="note" data-testid="host-feed-error">Marsad stopped receiving this host's session list: {feedReason(host.feedError)}. It will resume when the host reconnects.</div> : null}
       {twins ? <div className="gate" role="note"><div className="gate-h"><Icon name="warn" size="sm" />Same machine as {twins}</div><div className="small">These hosts reach one machine. Keep one of them: sessions and agents are the same on both.</div></div> : null}

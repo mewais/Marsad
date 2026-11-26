@@ -18,6 +18,8 @@
 //!   ([`hub::workstreams`]).
 //! * `diagnostics export` writes the diagnostics export (the file the app's Settings saves) for
 //!   when the app cannot start ([`export_cli`]).
+//! * `hold-sessions` keeps a WSL distribution up while the daemon has live sessions ([`hold`]);
+//!   the hub runs it in the distribution ([`hub::wsl_hold`]).
 //! * `--version` prints [`marsad_proto::daemon::VersionInfo`] as one JSON line.
 
 #![forbid(unsafe_code)]
@@ -28,6 +30,7 @@ pub mod bootwire;
 pub mod cli;
 pub mod diag;
 pub mod export_cli;
+pub mod hold;
 pub mod host;
 pub mod hub;
 pub mod hub_events;

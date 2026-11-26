@@ -22,6 +22,10 @@ use crate::migrate::Report;
 wasit_diag::diag_events! {
     /// Events of the hub's and the host's background services (`src` `hub` or `daemon`).
     pub enum HubEvent {
+        /// A WSL distribution's session holder could not be started: its live sessions may end
+        /// when WSL shuts the distribution down for being idle.
+        #[diag(ev = "wsl.hold_start_failed", lvl = error)]
+        WslHoldStartFailed { distro: Ident, error: ErrorInfo },
         /// A terminal's shell could not be killed when the terminal was closed (the shell may
         /// have exited on its own at the same moment).
         #[diag(ev = "pty.kill_failed", lvl = debug)]
@@ -179,6 +183,15 @@ fn foreign(code: &'static str, e: &impl Display) -> ErrorInfo {
 }
 
 /// The terminal `pty`'s shell could not be killed.
+/// The session holder of WSL distribution `distro` could not be started (`wsl.exe` refused or
+/// missing).
+pub fn wsl_hold_start_failed(distro: &str, e: &io::Error) {
+    record(HubEvent::WslHoldStartFailed {
+        distro: Ident::new(distro),
+        error: diag::io(e),
+    });
+}
+
 pub fn pty_kill_failed(pty: &str, e: &io::Error) {
     record(HubEvent::PtyKillFailed {
         pty: Ident::new(pty),

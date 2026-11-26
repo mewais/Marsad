@@ -99,20 +99,21 @@ export function AuthPromptDialog({ prompt, hostName, others, settle }: { prompt:
   const busy = answering || cancelling;
 
   return (
-    <Dialog open persistent onClose={stay} title={`Sign in to ${hostName}`} width={480} initialFocus={typed ? input : text}
+    <Dialog open persistent onClose={stay} title={`Sign in to ${hostName}`} width={500} initialFocus={typed ? input : text}
       footer={
         <>
-          <span className="faint small" aria-live="polite">{left > 0 ? `Gives up in ${left >= 60 ? `${Math.floor(left / 60)}m ${left % 60}s` : `${left}s`}` : "Expired"}</span>
-          <span className="sp" />
-          <Button pending={cancelling} disabled={answering} onClick={cancel}>Cancel sign-in</Button>
-          {typed ? <Button variant="primary" disabled={!value || cancelling} pending={answering} onClick={() => answer(value)}>Sign in</Button> : null}
-          {prompt.kind === "confirm" ? (
-            <>
-              <Button variant="deny" disabled={cancelling} pending={answering} onClick={() => answer("no")}>No</Button>
-              <Button variant="primary" disabled={cancelling} pending={answering} onClick={() => answer("yes")}>Yes</Button>
-            </>
-          ) : null}
-          {prompt.kind === "info" ? <Button disabled={cancelling} pending={answering} onClick={() => answer("")}>Continue</Button> : null}
+          <span className="faint small authp-timer tnum" aria-live="polite">{left > 0 ? `Gives up in ${left >= 60 ? `${Math.floor(left / 60)}m ${left % 60}s` : `${left}s`}` : "Expired"}</span>
+          <div className="authp-acts">
+            <Button pending={cancelling} disabled={answering} onClick={cancel}>Cancel sign-in</Button>
+            {typed ? <Button variant="primary" disabled={!value || cancelling} pending={answering} onClick={() => answer(value)}>Sign in</Button> : null}
+            {prompt.kind === "confirm" ? (
+              <>
+                <Button disabled={cancelling} pending={answering} onClick={() => answer("no")}>No</Button>
+                <Button variant="primary" disabled={cancelling} pending={answering} onClick={() => answer("yes")}>Yes</Button>
+              </>
+            ) : null}
+            {prompt.kind === "info" ? <Button disabled={cancelling} pending={answering} onClick={() => answer("")}>Continue</Button> : null}
+          </div>
         </>
       }>
       <form className="authp" onSubmit={(e) => { e.preventDefault(); if (typed && value && !busy) answer(value); }}>

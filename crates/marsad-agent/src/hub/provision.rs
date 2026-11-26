@@ -767,18 +767,23 @@ impl BootstrapConnector {
         send_learned(&self.learned, l).await;
     }
 
-    /// Classify an attempt that ended before the protocol started.
+    /// Classify an attempt that ended at `stage` before the protocol finished. `what` says how
+    /// the host's end was seen, for the reason when the transport said nothing.
     async fn failed(
         &self,
         signin: &SignInAttempt,
         child: &wasit_control::ChildHandle,
+        stage: BootStage,
         what: &str,
     ) -> ConnectError {
         let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
-        let kind = failure_kind(child.transport(), code, signin, &stderr);
-        let detail = if stderr.is_empty() {
+        let kind = failure_kind(child.transport(), code, signin, &stderr, past_report(stage));
+        let detail = if kind == CommandFailureKind::ConnectionLost {
+            let words = if stderr.is_empty() { what } else { &stderr };
+            connection_lost_detail(signin.host(), stage, words)
+        } else if stderr.is_empty() {
             format!("{what} (exit {code:?})")
         } else {
             stderr
@@ -800,7 +805,7 @@ impl BootstrapConnector {
         Failure {
             stage,
             error: self
-                .failed(signin, child, &format!("{what} ({})", e.kind()))
+                .failed(signin, child, stage, &format!("{what} ({})", e.kind()))
                 .await,
         }
     }
@@ -828,8 +833,8 @@ impl BootstrapConnector {
         };
         let mut kind = match (&entry.kind, &listed) {
             (HostKind::Wsl { distro }, Some(list)) => wsl_failure(distro, list)
-                .unwrap_or_else(|| failure_kind(child.transport(), code, signin, &both)),
-            _ => failure_kind(child.transport(), code, signin, &both),
+                .unwrap_or_else(|| failure_kind(child.transport(), code, signin, &both, false)),
+            _ => failure_kind(child.transport(), code, signin, &both, false),
         };
         if kind == CommandFailureKind::Other && !stdout.is_empty() {
             kind = CommandFailureKind::UnexpectedOutput;
@@ -918,11 +923,14 @@ pub fn display_fallback(current: Option<&std::ffi::OsStr>) -> Option<(String, St
 /// transport wrote, for the few refusals of ssh that need a person and print a fixed message
 /// ([`ssh_refusal`]). Anything else is `Other` (retried with backoff). `words` is the transport's
 /// stderr (and the sign-in's log): shown to the user, and read here only for those messages.
+///
+/// `past_report`: the host's report was read, so the sign-in went through (see [`past_report`]).
 pub fn failure_kind(
     transport: TransportKind,
     exit: Option<i32>,
     signin: &SignInAttempt,
     words: &str,
+    past_report: bool,
 ) -> CommandFailureKind {
     failure_kind_of(
         transport,
@@ -931,9 +939,55 @@ pub fn failure_kind(
             beyond_host_key: signin.asked_beyond_host_key(),
             needs_user: signin.needed_user(),
             host_key_refused: signin.host_key_refused(),
+            answered: signin.answered_all(),
+            past_report,
         },
         words,
     )
+}
+
+/// Whether a failure at `stage` came after the host's report was read: the host answered a
+/// shell, so the sign-in the attempt made went through. Before that, a failure proves nothing
+/// about the sign-in (the user may have cancelled it, or the host never started a shell).
+pub fn past_report(stage: BootStage) -> bool {
+    matches!(
+        stage,
+        BootStage::Platform
+            | BootStage::Helper
+            | BootStage::Upload
+            | BootStage::Ok
+            | BootStage::Hello
+            | BootStage::Check
+    )
+}
+
+/// The reason shown for a lost connection: the host and the stage it was lost at, in words, and
+/// what the transport said when it said anything. Pure.
+pub fn connection_lost_detail(host: &HostId, stage: BootStage, words: &str) -> String {
+    let said = if words.is_empty() {
+        String::new()
+    } else {
+        format!(" (it said: {words})")
+    };
+    format!(
+        "The connection to {host} was lost while {}; connect again{said}",
+        stage_words(stage)
+    )
+}
+
+/// What the attempt was doing at `stage`, in words that follow "while".
+fn stage_words(stage: BootStage) -> &'static str {
+    match stage {
+        BootStage::Platform => "reading the host's report",
+        BootStage::Helper => "preparing the Marsad helper",
+        BootStage::Upload => "sending the Marsad helper",
+        BootStage::Ok => "the host was installing the Marsad helper",
+        BootStage::Hello => "connecting to the Marsad helper",
+        BootStage::Check => "checking the Marsad daemon on the host",
+        BootStage::Prepare | BootStage::Spawn | BootStage::SignIn | BootStage::Report => {
+            "talking to the host"
+        }
+    }
 }
 
 /// What a sign-in asked, as far as the failure decision goes.
@@ -946,6 +1000,10 @@ pub struct Asks {
     /// The host key was refused or left unanswered ([`SignInAttempt::host_key_refused`]). A key
     /// the user accepted is not this: a failure after it is judged as any other.
     pub host_key_refused: bool,
+    /// Every prompt the attempt was asked was answered by the user ([`SignInAttempt::answered_all`]).
+    pub answered: bool,
+    /// The host's report was read: the sign-in went through ([`past_report`]).
+    pub past_report: bool,
 }
 
 /// [`failure_kind`] from the facts alone (pure).
@@ -961,6 +1019,18 @@ pub fn failure_kind_of(
             127 => CommandFailureKind::CommandNotFound,
             _ => CommandFailureKind::HelperFailed,
         };
+    }
+    // A sign-in the user completed, a report read after it, and then a connection that ended
+    // without ssh refusing the login: the connection was lost, and the user must connect again
+    // (a retry on its own would ask the same prompts again). A refusal by ssh's own words is
+    // still a refusal, judged below.
+    if asks.needs_user
+        && asks.answered
+        && asks.past_report
+        && !asks.host_key_refused
+        && ssh_refusal(transport, exit, words).is_none()
+    {
+        return CommandFailureKind::ConnectionLost;
     }
     if asks.needs_user {
         CommandFailureKind::AuthNeeded
@@ -1351,6 +1421,7 @@ impl BootstrapConnector {
                         .failed(
                             signin,
                             child,
+                            stage,
                             &format!(
                                 "the host sent {} {} (exit status follows)",
                                 p.describe(),
@@ -1922,7 +1993,7 @@ impl BootstrapConnector {
                     .collect::<Vec<_>>()
                     .join("\n");
                 // The sign-in step is ssh with no remote command: its status is ssh's own.
-                let kind = failure_kind(TransportKind::Ssh, code, signin, &text);
+                let kind = failure_kind(TransportKind::Ssh, code, signin, &text, false);
                 let detail = if text.is_empty() {
                     format!("signing in to the host failed (exit {code:?})")
                 } else {
@@ -2330,6 +2401,7 @@ mod tests {
             beyond_host_key: true,
             needs_user: true,
             host_key_refused: false,
+            ..Asks::default()
         };
         let refused = Asks {
             host_key_refused: true,
@@ -2380,6 +2452,221 @@ mod tests {
             failure_kind_of(TransportKind::Other, Some(127), nothing, no_words),
             CommandFailureKind::Other
         );
+    }
+
+    /// A sign-in the user completed, and then the connection was reset while the helper was
+    /// uploaded (exit 255, nothing refused): the connection was lost, not a sign-in refused. It
+    /// stays held (`needs_human`), but says what happened. Red without the `ConnectionLost` branch.
+    #[test]
+    fn a_reset_after_a_completed_sign_in_is_a_lost_connection_and_a_refusal_stays_one() {
+        let reset = "client_loop: send disconnect: Connection reset by 192.0.2.7 port 22\n";
+        let completed = Asks {
+            beyond_host_key: true,
+            needs_user: true,
+            host_key_refused: false,
+            answered: true,
+            past_report: true,
+        };
+        let ssh =
+            |asks: Asks, words: &str| failure_kind_of(TransportKind::Ssh, Some(255), asks, words);
+        assert_eq!(ssh(completed, reset), CommandFailureKind::ConnectionLost);
+        assert!(CommandFailureKind::ConnectionLost.needs_human());
+        // The same reset before a report was read: the sign-in proves nothing, so it stays as it was.
+        assert_eq!(
+            ssh(
+                Asks {
+                    past_report: false,
+                    ..completed
+                },
+                reset
+            ),
+            CommandFailureKind::AuthNeeded
+        );
+        // A prompt the user did not answer (cancelled, timed out): the attempt gave up on it.
+        assert_eq!(
+            ssh(
+                Asks {
+                    answered: false,
+                    ..completed
+                },
+                reset
+            ),
+            CommandFailureKind::AuthNeeded
+        );
+        // A refusal by ssh's words is a refusal, even after the report.
+        assert_eq!(
+            ssh(completed, "box: Permission denied (publickey,password).\n"),
+            CommandFailureKind::AuthNeeded
+        );
+        assert_eq!(
+            ssh(completed, "@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@\nHost key verification failed.\n"),
+            CommandFailureKind::AuthNeeded,
+            "a changed key after a sign-in still parks as needing the user"
+        );
+        // Nothing was asked: an ordinary network failure is retried, as before.
+        assert_eq!(
+            ssh(
+                Asks {
+                    past_report: true,
+                    answered: true,
+                    ..Asks::default()
+                },
+                reset
+            ),
+            CommandFailureKind::Other
+        );
+        // The remote program's own status still decides, whatever the prompts were.
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(127), completed, reset),
+            CommandFailureKind::CommandNotFound
+        );
+    }
+
+    /// The reason shown for a lost connection names the host and the stage, and keeps what the
+    /// transport said. Red without [`connection_lost_detail`].
+    #[test]
+    fn a_lost_connection_says_where_it_was_lost() {
+        let host = HostId::new("narval");
+        assert_eq!(
+            connection_lost_detail(&host, BootStage::Upload, "Connection reset by 192.0.2.7 port 22"),
+            "The connection to narval was lost while sending the Marsad helper; connect again (it said: Connection reset by 192.0.2.7 port 22)"
+        );
+        assert_eq!(
+            connection_lost_detail(&host, BootStage::Hello, ""),
+            "The connection to narval was lost while connecting to the Marsad helper; connect again"
+        );
+        assert!(!connection_lost_detail(&host, BootStage::Upload, "").contains("sign in"));
+        assert!(past_report(BootStage::Upload) && !past_report(BootStage::Report));
+    }
+
+    /// Through the transport: a fake `ssh` (a program named ssh, which prints what ssh prints
+    /// when the connection is reset and exits 255) fails an attempt that answered its prompt.
+    /// Answered and past the report at upload: `connection_lost`, with the host and the stage in
+    /// the reason. Cancelled at the prompt: still `auth_needed`. Red without the classification.
+    /// POSIX only: the fake is a shell script (the Windows build has no such program to run).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fake_ssh_reset_after_an_answered_prompt_is_a_lost_connection() {
+        let dir = std::env::temp_dir().join(format!("mrs-conn-lost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ssh = dir.join("ssh");
+        std::fs::write(
+            &ssh,
+            "#!/bin/sh\necho 'client_loop: send disconnect: Connection reset by 192.0.2.7 port 22' >&2\nexit 255\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let host = HostId::new("narval");
+        let entry = HostEntry {
+            id: host.clone(),
+            name: "narval".into(),
+            kind: HostKind::Ssh {
+                target: "u@192.0.2.7".into(),
+                port: None,
+                identity_file: None,
+                options: Vec::new(),
+            },
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: true,
+            ask_before_connecting: false,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        };
+        let (connector, prompts) = connector_for(entry, &dir);
+        // The attempt's sign-in asks for a password, and the user answers it (prompt 1 of a fresh
+        // hub: the answer addresses it by that number).
+        let attempt = prompts.begin_attempt(&host, None);
+        let asking = {
+            let (p, h, tag) = (prompts.clone(), host.clone(), attempt.tag());
+            tokio::spawn(async move { p.ask(h, tag, "Password: ".into()).await })
+        };
+        attempt
+            .asking()
+            .wait_for(|a| *a == Asking::Asked)
+            .await
+            .unwrap();
+        prompts.answer(&host, 1, "hunter2".into()).unwrap();
+        asking.await.unwrap().unwrap();
+
+        let (_io, child) = CommandTransport::spawn(&CommandSpec::new([
+            ssh.display().to_string(),
+            "u@192.0.2.7".to_owned(),
+        ]))
+        .unwrap();
+        let err = connector
+            .failed(
+                &attempt,
+                &child,
+                BootStage::Upload,
+                "the host closed the connection",
+            )
+            .await;
+        let ConnectError::Command {
+            kind: k, stderr, ..
+        } = &err
+        else {
+            panic!("a command failure: {err:?}");
+        };
+        assert_eq!(*k, CommandFailureKind::ConnectionLost, "{stderr}");
+        assert!(
+            stderr.starts_with(
+                "The connection to narval was lost while sending the Marsad helper; connect again"
+            ),
+            "{stderr}"
+        );
+        assert!(stderr.contains("Connection reset by 192.0.2.7"), "{stderr}");
+
+        // The same reset when the report was never read: the sign-in proves nothing.
+        let (_io, early) = CommandTransport::spawn(&CommandSpec::new([
+            ssh.display().to_string(),
+            "u@192.0.2.7".to_owned(),
+        ]))
+        .unwrap();
+        let err = connector
+            .failed(
+                &attempt,
+                &early,
+                BootStage::Report,
+                "the host closed the connection",
+            )
+            .await;
+        assert_eq!(kind(&err), CommandFailureKind::AuthNeeded);
+
+        // A prompt the user cancelled is not a completed sign-in.
+        let cancelled = prompts.begin_attempt(&host, None);
+        let asking = {
+            let (p, h, tag) = (prompts.clone(), host.clone(), cancelled.tag());
+            tokio::spawn(async move { p.ask(h, tag, "Password: ".into()).await })
+        };
+        cancelled
+            .asking()
+            .wait_for(|a| *a == Asking::Asked)
+            .await
+            .unwrap();
+        prompts.cancel(&host, 2).unwrap();
+        assert!(asking.await.unwrap().is_err());
+        let (_io, after_cancel) = CommandTransport::spawn(&CommandSpec::new([
+            ssh.display().to_string(),
+            "u@192.0.2.7".to_owned(),
+        ]))
+        .unwrap();
+        let err = connector
+            .failed(
+                &cancelled,
+                &after_cancel,
+                BootStage::Upload,
+                "the host closed the connection",
+            )
+            .await;
+        assert_eq!(kind(&err), CommandFailureKind::AuthNeeded);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Requirement 1 (E3): ssh's exit 255 with no prompt is retried with backoff, except the two

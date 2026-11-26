@@ -15,7 +15,7 @@ export function SignInStrip() {
   if (!hosts.length || route.name === "inbox" || route.name === "hosts") return null;
   const one = hosts.length === 1 ? hosts[0] : null;
   return (
-    <section className="banner warn" aria-label="Hosts waiting for you" aria-live="polite" data-testid="signin-strip">
+    <section className="banner warn signin-strip" aria-label="Hosts waiting for you" aria-live="polite" data-testid="signin-strip">
       <Icon name="key" size="sm" />
       <div className="bt">
         {one ? (
@@ -28,7 +28,9 @@ export function SignInStrip() {
           </>
         )}
       </div>
-      {hosts.map((h) => <SignInButton key={h.id} host={h} label={one ? "Sign in" : `Sign in to ${h.name}`} />)}
+      <div className="banner-acts">
+        {hosts.map((h) => <SignInButton key={h.id} host={h} label={one ? "Sign in" : `Sign in to ${h.name}`} />)}
+      </div>
     </section>
   );
 }

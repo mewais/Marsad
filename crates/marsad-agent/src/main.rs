@@ -8,7 +8,7 @@ use marsad_agent::{cli::Options, serve, version};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: marsad-agent serve [--hub] [options] | bridge [options] | boot --host-id <id> --hub-id <hub> [options] | stop [options] | diagnostics export [options] | shim <args> | mcp --socket <path> --session <id> | --version"
+        "usage: marsad-agent serve [--hub] [options] | bridge [options] | boot --host-id <id> --hub-id <hub> [options] | stop [options] | diagnostics export [options] | shim <args> | mcp --socket <path> --session <id> | hold-sessions | --version"
     );
     ExitCode::from(2)
 }
@@ -100,6 +100,19 @@ fn main() -> ExitCode {
                 Ok(rest) => marsad_agent::askmcp::run(&rest),
                 Err(bad) => {
                     eprintln!("marsad-agent ask-mcp: argument is not UTF-8: {bad:?}");
+                    ExitCode::from(2)
+                }
+            };
+        }
+        Some("hold-sessions") => {
+            // The WSL distribution's keep-alive (`hold` documents it); it has its own lock and
+            // no sink, so it runs before any of the daemon's set-up.
+            diag::content_free_panic_hook("hold-sessions");
+            let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
+            return match rest {
+                Ok(rest) => marsad_agent::hold::run(&rest),
+                Err(bad) => {
+                    eprintln!("marsad-agent hold-sessions: argument is not UTF-8: {bad:?}");
                     ExitCode::from(2)
                 }
             };

@@ -4,12 +4,42 @@ import { Icon, type IconName } from "./Icon";
 import { Elapsed, useNow } from "./Elapsed";
 
 /**
- * A connect in progress, in words: "Connecting · <stage> · <elapsed>" (the elapsed clock runs from
- * the hub's `since_ms`), or a bare "Connecting" when the hub named no stage.
+ * A connect in progress: header row ("Connecting" + right-aligned tabular elapsed time) with the
+ * hub's stage on its own single-line ellipsized row and the full wording in a tooltip. Without a
+ * stage (or `since`), renders the bare header and optional fallback line.
  */
-export function ConnectingWords({ stage, since }: { stage?: string; since?: number }) {
-  if (!stage || since === undefined) return <>Connecting</>;
-  return <>Connecting · {stage} · <Elapsed t={{ started_at_ms: since, running: true }} /></>;
+export function ConnectingWords({
+  stage,
+  since,
+  fallback,
+  icon,
+}: {
+  stage?: string;
+  since?: number;
+  fallback?: string;
+  icon?: React.ReactNode;
+}) {
+  const hasStage = !!stage && since !== undefined;
+  return (
+    <div className="conn-prog" data-testid="connecting-progress">
+      <div className="conn-prog-head">
+        {icon}
+        <span className="conn-prog-word">Connecting</span>
+        {hasStage ? (
+          <span className="conn-prog-elapsed tnum" data-testid="connecting-elapsed">
+            <Elapsed t={{ started_at_ms: since, running: true }} />
+          </span>
+        ) : null}
+      </div>
+      {hasStage ? (
+        <div className="conn-prog-stage small" title={stage} data-testid="connecting-stage">
+          {stage}
+        </div>
+      ) : fallback ? (
+        <div className="conn-prog-stage small">{fallback}</div>
+      ) : null}
+    </div>
+  );
 }
 
 export function hostIcon(h: Pick<HostView, "local" | "os" | "kind">): IconName {
@@ -17,21 +47,30 @@ export function hostIcon(h: Pick<HostView, "local" | "os" | "kind">): IconName {
   return h.local ? "laptop" : "server";
 }
 
-/** The link state in words, never just a dot. */
+/**
+ * The link state in words, never just a dot. A connect in progress keeps the chip compact
+ * ("Connecting" + tabular elapsed time, full stage in `title`) so long stage wording never
+ * squeezes adjacent content.
+ */
 export function ConnState({ host, short }: { host: Pick<HostView, "link" | "authPrompt">; short?: boolean }) {
   const ticking = host.link.link === "remote" && host.link.state.state === "reconnecting" && !short;
   const now = useNow(ticking);
   const v = linkView(host.link as FleetLink, host.authPrompt, now);
   const st = host.link.link === "remote" ? host.link.state : undefined;
-  const words =
-    short ? v.word
-    : st?.state === "connecting" && v.key === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} />
-    : v.key === "auth_needed" || v.key === "failed" ? v.word
+  const connectingWithStage = !short && st?.state === "connecting" && v.key === "connecting" && !!st.stage;
+  const label =
+    short || v.key === "auth_needed" || v.key === "failed" || v.key === "connecting" ? v.word
     : v.detail.split(" · ")[0];
+  const tip = st?.state === "connecting" && st.stage ? st.stage : undefined;
   return (
-    <span className={`conn ${v.tone}`} data-link={v.key} data-held={v.held ? "" : undefined}>
+    <span className={`conn ${v.tone}`} data-link={v.key} data-held={v.held ? "" : undefined} title={tip}>
       <span className="pip" aria-hidden="true" />
-      {words}
+      <span className="conn-word">{label}</span>
+      {connectingWithStage ? (
+        <span className="conn-elapsed tnum">
+          <Elapsed t={{ started_at_ms: st.since_ms, running: true }} />
+        </span>
+      ) : null}
     </span>
   );
 }
