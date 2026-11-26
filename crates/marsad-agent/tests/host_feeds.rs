@@ -280,7 +280,10 @@ impl Rig {
             .host_upserted(
                 box_entry(),
                 FleetLink::Remote {
-                    state: LinkState::Connecting,
+                    state: LinkState::Connecting {
+                        stage: None,
+                        since_ms: 0,
+                    },
                 },
             )
             .await;

@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import { linkView, type HostView } from "../state/hosts";
 import type { FleetLink } from "../bridge/wire";
+import { Elapsed } from "../features/session/SessionWork";
 import { Icon, type IconName } from "./Icon";
+
+/**
+ * A connect in progress, in words: "Connecting · <stage> · <elapsed>" (the elapsed clock runs from
+ * the hub's `since_ms`), or a bare "Connecting" when the hub named no stage.
+ */
+export function ConnectingWords({ stage, since }: { stage?: string; since?: number }) {
+  if (!stage || since === undefined) return <>Connecting</>;
+  return <>Connecting · {stage} · <Elapsed t={{ started_at_ms: since, running: true }} /></>;
+}
 
 export function hostIcon(h: Pick<HostView, "local" | "os" | "kind">): IconName {
   if (h.os === "windows" || h.kind.kind === "wsl") return "monitor";
@@ -24,10 +34,16 @@ export function ConnState({ host, short }: { host: Pick<HostView, "link" | "auth
   const ticking = host.link.link === "remote" && host.link.state.state === "reconnecting" && !short;
   const now = useNow(ticking);
   const v = linkView(host.link as FleetLink, host.authPrompt, now);
+  const st = host.link.link === "remote" ? host.link.state : undefined;
+  const words =
+    short ? v.word
+    : st?.state === "connecting" && v.key === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} />
+    : v.key === "auth_needed" || v.key === "failed" ? v.word
+    : v.detail.split(" · ")[0];
   return (
     <span className={`conn ${v.tone}`} data-link={v.key} data-held={v.held ? "" : undefined}>
       <span className="pip" aria-hidden="true" />
-      {short || v.key === "auth_needed" || v.key === "failed" ? v.word : v.detail.split(" · ")[0]}
+      {words}
     </span>
   );
 }

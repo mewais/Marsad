@@ -23,11 +23,14 @@ describe("a host whose link comes back", () => {
       .filter(([k]) => k.startsWith("hz/"))
       .map(([, v]) => v);
     expect(hzSessions.length).toBeGreaterThan(0);
-    let s = applyFleet(app.store.get(), { kind: "link", host: "hz", state: reconnecting });
+    // The hub ends the host's live sessions as its link drops (its own event, before the link's).
+    let s = applyFleet(app.store.get(), { kind: "sessions_live", host: "hz", live: false });
+    s = applyFleet(s, { kind: "link", host: "hz", state: reconnecting });
     expect(hostStale(s, "hz")).toBe(true);
     // The link connecting alone must not make the old list look live: the hub sends a fresh snapshot after it resubscribes.
     s = applyFleet(s, { kind: "link", host: "hz", state: { state: "connected", hello: hello("hz") } });
     expect(hostStale(s, "hz")).toBe(true);
+    s = applyFleet(s, { kind: "sessions_live", host: "hz", live: true });
     s = applyFleet(s, { kind: "sessions", host: "hz", sessions: hzSessions });
     expect(hostStale(s, "hz")).toBe(false);
     // Only that host: another host's list is not touched by hz's link.

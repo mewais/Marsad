@@ -520,7 +520,10 @@ mod tests {
             .host_upserted(
                 entry(host),
                 FleetLink::Remote {
-                    state: marsad_proto::LinkState::Connecting,
+                    state: marsad_proto::LinkState::Connecting {
+                        stage: None,
+                        since_ms: 0,
+                    },
                 },
             )
             .await;

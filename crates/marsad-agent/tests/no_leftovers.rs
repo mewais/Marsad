@@ -253,7 +253,7 @@ async fn wait_for_first_attempt_after_loss(c: &marsad_client::MarsadClient) {
     state.wait_for(|s| !s.is_connected()).await.unwrap();
     state
         .wait_for(|s| {
-            !matches!(s, LinkState::Connecting)
+            !matches!(s, LinkState::Connecting { .. })
                 && !matches!(s, LinkState::Reconnecting { attempt: 1, .. })
         })
         .await

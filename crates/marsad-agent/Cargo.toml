@@ -48,5 +48,6 @@ sha2 = "0.10"
 
 [dev-dependencies]
 marsad-agent = { path = ".", features = ["panic-test"] }
+tokio = { workspace = true, features = ["test-util"] }
 marsad-client = { workspace = true }
 wasit-fake-cli = { workspace = true }

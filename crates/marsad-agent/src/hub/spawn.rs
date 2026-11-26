@@ -50,10 +50,31 @@ use crate::hub_events;
 /// Bound on one authority call through the in-process connection (a launch includes the CLI's
 /// start on the target host).
 const CALL: Duration = Duration::from_secs(150);
-/// Bound on the inventory of one host while answering `spawnable`.
-const INVENTORY: Duration = Duration::from_secs(4);
-/// Bound on waiting for a host to find its drivers' binaries.
-const RESOLVE: Duration = Duration::from_secs(10);
+/// Follows the host's inventory events until no driver is still being probed (or the stream
+/// ends) and returns the latest reply. There is no timer: a host whose probe is slow keeps the
+/// wait open, the same way the launch path waits for `agentconfig.base` to settle.
+async fn settle_inventory<S, T, E>(mut reply: InventoryReply, mut events: S) -> InventoryReply
+where
+    S: futures::Stream<Item = Result<(T, serde_json::Value), E>> + Unpin,
+{
+    while let Some(Ok((_, v))) = events.next().await {
+        let Ok(inv) = serde_json::from_value::<InventoryReply>(v) else {
+            continue;
+        };
+        let settled = !inv.drivers.iter().any(unresolved);
+        reply = inv;
+        if settled {
+            break;
+        }
+    }
+    reply
+}
+
+/// A driver whose binary the host has not looked for yet (its first probe is still running).
+fn unresolved(d: &DriverInventory) -> bool {
+    !d.installed && d.error.is_none()
+}
+
 /// Models listed per driver in `spawnable`.
 const MODELS: usize = 12;
 
@@ -227,7 +248,6 @@ impl HubServices {
         ctx: &CallContext,
         host: &HostId,
     ) -> Result<Vec<DriverInventory>, MarsadError> {
-        let unresolved = |d: &DriverInventory| !d.installed && d.error.is_none();
         let mut r: InventoryReply = self
             .on_host(
                 ctx,
@@ -246,21 +266,7 @@ impl HubServices {
                 .subscribe(c, rt_topics::DRIVERS_INVENTORY, params, None)
                 .await
             {
-                Ok(mut stream) => {
-                    let wait = async {
-                        while let Some(Ok((_, v))) = stream.next().await {
-                            if let Ok(inv) = serde_json::from_value::<InventoryReply>(v) {
-                                let done = !inv.drivers.iter().any(unresolved);
-                                r = inv;
-                                if done {
-                                    return;
-                                }
-                            }
-                        }
-                    };
-                    // Bounded: whatever is known by then counts.
-                    let _ = tokio::time::timeout(RESOLVE, wait).await;
-                }
+                Ok(stream) => r = settle_inventory(r, stream).await,
                 Err(e) => hub_events::inventory_unavailable(host, &e),
             }
         }
@@ -730,13 +736,15 @@ impl HubServices {
         let futs = hosts_ids
             .into_iter()
             .filter(|h| self.host_connected(h))
+            // No timer here: a host's inventory is settled by its events (see `settle_inventory`).
+            // A slow probe makes the answer wait; only a host whose inventory fails is left out.
             .map(|h| async move {
-                let inv = tokio::time::timeout(INVENTORY, self.inventory(ctx, &h)).await;
+                let inv = self.inventory(ctx, &h).await;
                 (h, inv)
             });
         let mut hosts = Vec::new();
         for (h, inv) in futures::future::join_all(futs).await {
-            let Ok(Ok(inv)) = inv else { continue };
+            let Ok(inv) = inv else { continue };
             let drivers: Vec<SpawnDriver> = inv
                 .into_iter()
                 .filter(|d| st.allowed_drivers.is_empty() || st.allowed_drivers.contains(&d.driver))
@@ -791,5 +799,63 @@ impl HubServices {
         )
         .await
         .ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::stream;
+    use serde_json::json;
+
+    /// One driver's inventory entry (its binary found or not yet looked for).
+    fn reply(installed: bool) -> InventoryReply {
+        serde_json::from_value(json!({
+            "drivers": [{
+                "driver": "claude",
+                "display_name": "Claude",
+                "capabilities": {
+                    "interrupt": false, "set_model": false, "set_mode": false,
+                    "slash_commands": false, "permission_gates": false, "questions": false,
+                    "plan_gate": false, "usage": false, "cost": false, "resume": false,
+                    "continue_latest": false, "streaming_output": false,
+                    "prompt_while_busy": "queued_by_cli", "earlier_history": "none",
+                    "fork": false, "compact": false, "run_shell": false, "subagents": {},
+                },
+                "installed": installed,
+                "refreshing": !installed,
+                "refreshed_at_ms": 0,
+            }]
+        }))
+        .expect("inventory reply")
+    }
+
+    fn event(r: &InventoryReply) -> Result<((), serde_json::Value), ()> {
+        Ok(((), serde_json::to_value(r).expect("json")))
+    }
+
+    /// A host still probing its driver's binary keeps the wait open however long the probe takes:
+    /// the probe here settles after 12 seconds, past where a 10-second bound would have given up.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_probe_is_waited_for_not_cut_off() {
+        let first = stream::iter([event(&reply(false))]);
+        let later = stream::once(async {
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            event(&reply(true))
+        });
+        let events = first.chain(later).boxed();
+        let settled = settle_inventory(reply(false), events).await;
+        assert!(
+            settled.drivers.iter().all(|d| d.installed),
+            "the wait ended before the probe finished"
+        );
+    }
+
+    /// When the event stream ends first, whatever was last known is the answer.
+    #[tokio::test]
+    async fn a_closed_stream_returns_the_last_known_inventory() {
+        let events = stream::iter([event(&reply(false))]).boxed();
+        let settled = settle_inventory(reply(false), events).await;
+        assert!(settled.drivers.iter().all(|d| !d.installed));
     }
 }

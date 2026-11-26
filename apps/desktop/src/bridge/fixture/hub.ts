@@ -58,7 +58,7 @@ export class FixtureHub {
         const id = d.id ?? d.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
         if (c.hostDefs().some((h) => h.entry.id === id)) throw err("invalid_params", `A host with id “${id}” already exists.`);
         const entry: HostEntry = { id, name: d.name, kind: d.kind, platform: null, created_at_ms: c.now(), interactive_auth: false, local_files: d.kind.kind === "wsl", shared_connection: d.kind.kind === "ssh", signed_out: false };
-        c.addHost({ entry, link: { state: "connecting" }, drivers: { claude: "2.1.4", codex: "0.58.0" } });
+        c.addHost({ entry, link: { state: "connecting", since_ms: c.now() }, drivers: { claude: "2.1.4", codex: "0.58.0" } });
         return entry;
       }
       case M.HOSTS_UPDATE:

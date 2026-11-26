@@ -734,10 +734,17 @@ export class FixtureBackend implements Backend {
   setLink(id: HostId, state: LinkState) {
     const h = this.hosts.get(id)!;
     this.recordLink(id, h.def.link, state);
+    const wasUp = this.isUp(h);
+    const lost = wasUp && state.state !== "connected";
     h.def.link = state;
+    // Like the hub: a dropped link ends the host's live sessions before the link is reported, and a
+    // connected host's session list goes live before the list itself arrives.
+    if (lost) this.fleet({ kind: "sessions_live", host: id, live: false });
     this.fleet({ kind: "link", host: id, state });
-    // Like the hub: once the host is connected it delivers its session list.
-    if (state.state === "connected") this.fleet({ kind: "sessions", host: id, sessions: [...h.sessions.values()].map((e) => e.snap) });
+    if (state.state === "connected") {
+      if (!wasUp) this.fleet({ kind: "sessions_live", host: id, live: true });
+      this.fleet({ kind: "sessions", host: id, sessions: [...h.sessions.values()].map((e) => e.snap) });
+    }
   }
 
   /** The hub's connection records of a link changing state: an attempt begins, ends with an outcome, and the state itself. */
@@ -769,7 +776,9 @@ export class FixtureBackend implements Backend {
   private addHost(def: FixtureHost) {
     this.hosts.set(def.entry.id, { def, prompt: null, sessions: new Map() });
     this.fleet({ kind: "host_upserted", host: def.entry });
-    this.fleet({ kind: "link", host: def.entry.id, state: { state: "connecting" } });
+    // A local host's sessions are live from the start: the hub has nothing to connect to.
+    if (this.isUp(this.hosts.get(def.entry.id)!)) this.fleet({ kind: "sessions_live", host: def.entry.id, live: true });
+    this.fleet({ kind: "link", host: def.entry.id, state: { state: "connecting", since_ms: this.opts.now() } });
     this.later(600 * this.opts.speed, () => this.setLink(def.entry.id, { state: "provisioning", reason: { kind: "command_not_found", detail: "marsad-agent: command not found" } }));
     this.later(2400 * this.opts.speed, () => {
       def.entry = { ...def.entry, platform: { os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu" } };
@@ -800,7 +809,7 @@ export class FixtureBackend implements Backend {
     if (!h) throw err("not_found", `No host ${id}`);
     if (!h.def.link) return;
     h.signedOut = false;
-    this.setLink(id, { state: "connecting" });
+    this.setLink(id, { state: "connecting", since_ms: this.opts.now() });
     if (h.def.entry.interactive_auth) {
       this.later(300 * this.opts.speed, () => this.setAuthPrompt(id, { prompt: this.passwordPrompt(h), kind: "secret", attempt: 1 }));
     } else this.later(800 * this.opts.speed, () => this.setLink(id, connected(id)));

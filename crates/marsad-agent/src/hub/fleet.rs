@@ -250,12 +250,14 @@ impl State {
                 let id = entry.id.clone();
                 // The link a host is first seen with is announced right after it: a link event
                 // that came before the host was known was not kept.
+                let mut live_at_start = false;
                 let announce = match self.hosts.get_mut(&id) {
                     Some(h) => {
                         h.host = entry.clone();
                         None
                     }
                     None => {
+                        // The local host's sessions are live from the start (no link to wait for).
                         let live = matches!(link, FleetLink::Local);
                         let announce = match &link {
                             FleetLink::Local => None,
@@ -273,10 +275,17 @@ impl State {
                                 feed_error: None,
                             },
                         );
+                        live_at_start = live;
                         announce
                     }
                 };
                 self.emit(FleetEvent::HostUpserted { host: entry });
+                if live_at_start {
+                    self.emit(FleetEvent::SessionsLive {
+                        host: id.clone(),
+                        live: true,
+                    });
+                }
                 if let Some(state) = announce {
                     self.emit(FleetEvent::Link { host: id, state });
                 }
@@ -290,12 +299,18 @@ impl State {
                 let Some(h) = self.hosts.get_mut(&id) else {
                     return;
                 };
-                if !state.is_connected() {
-                    h.sessions_live = false;
-                }
+                // A dropped link ends the host's live sessions: the flag goes first, so no client
+                // ever shows a live host on a link that is down.
+                let lost = !state.is_connected() && std::mem::replace(&mut h.sessions_live, false);
                 h.link = FleetLink::Remote {
                     state: state.clone(),
                 };
+                if lost {
+                    self.emit(FleetEvent::SessionsLive {
+                        host: id.clone(),
+                        live: false,
+                    });
+                }
                 self.emit(FleetEvent::Link { host: id, state });
             }
             Input::Feed(id, ev) => {
@@ -328,9 +343,15 @@ impl State {
                 match ev {
                     HostEvent::Reset { sessions } => {
                         h.sessions = sessions.clone();
-                        h.sessions_live = true;
+                        let went_live = !std::mem::replace(&mut h.sessions_live, true);
                         // A snapshot is what a refused feed gets back: the refusal is over.
                         let recovered = h.feed_error.take().is_some();
+                        if went_live {
+                            self.emit(FleetEvent::SessionsLive {
+                                host: id.clone(),
+                                live: true,
+                            });
+                        }
                         self.emit(FleetEvent::Sessions {
                             host: id.clone(),
                             sessions,
@@ -362,10 +383,14 @@ impl State {
                 if h.feed_error == error {
                     return;
                 }
-                if error.is_some() {
-                    h.sessions_live = false;
-                }
+                let refused = error.is_some() && std::mem::replace(&mut h.sessions_live, false);
                 h.feed_error = error.clone();
+                if refused {
+                    self.emit(FleetEvent::SessionsLive {
+                        host: id.clone(),
+                        live: false,
+                    });
+                }
                 self.emit(FleetEvent::FeedError { host: id, error });
             }
             Input::PromptShown(id, prompt) => {
@@ -918,7 +943,13 @@ mod tests {
 
         // A link state change is what wakes it.
         fleet
-            .send(Input::Link(host.clone(), LinkState::Connecting))
+            .send(Input::Link(
+                host.clone(),
+                LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0,
+                },
+            ))
             .await;
         assert!(
             opened_reaches(&mut opened, 3).await,
@@ -956,13 +987,125 @@ mod tests {
         );
 
         fleet
-            .send(Input::Link(host.clone(), LinkState::Connecting))
+            .send(Input::Link(
+                host.clone(),
+                LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0,
+                },
+            ))
             .await;
         assert!(
             opened_reaches(&mut opened, 2).await,
             "the feed reopens after a wake"
         );
         feed.abort();
+    }
+
+    /// Reads the fleet topic until `done` accepts an event, and returns everything read up to and
+    /// including it (the events of one step, in the order the hub sent them).
+    async fn fleet_events_until(
+        events: &mut EventStream,
+        done: impl Fn(&FleetEvent) -> bool,
+    ) -> Vec<FleetEvent> {
+        tokio::time::timeout(REACHED, async {
+            let mut seen = Vec::new();
+            while let Some(item) = events.next().await {
+                let (_, v) = item.expect("the fleet feed");
+                let ev: FleetEvent = serde_json::from_value(v).expect("a fleet event");
+                let last = done(&ev);
+                seen.push(ev);
+                if last {
+                    break;
+                }
+            }
+            seen
+        })
+        .await
+        .expect("the fleet topic delivers the step")
+    }
+
+    /// Whether a host's sessions are live is told to clients by `SessionsLive`, sent before the
+    /// event it describes: a live flag before the snapshot that made it live, and a lost flag
+    /// before the link state that lost it. Clients apply the flag as sent; they never derive it.
+    #[tokio::test]
+    async fn the_sessions_live_flag_comes_before_what_it_describes() {
+        let fleet = Fleet::spawn();
+        let host = HostId::new("r");
+        fleet
+            .host_upserted(
+                HostEntry {
+                    id: host.clone(),
+                    name: "r".to_string(),
+                    kind: HostKind::Local,
+                    platform: None,
+                    created_at_ms: 0,
+                    interactive_auth: false,
+                    local_files: false,
+                    shared_connection: false,
+                    signed_out: false,
+                    machine: None,
+                },
+                FleetLink::Remote {
+                    state: LinkState::Connecting {
+                        stage: None,
+                        since_ms: 0,
+                    },
+                },
+            )
+            .await;
+        let mut events = fleet.subscribe(None).await.expect("the fleet subscribes");
+        // The remote host starts without live sessions: nothing is said about it yet.
+        fleet_events_until(&mut events, |e| matches!(e, FleetEvent::Reset { .. })).await;
+
+        fleet
+            .send(Input::Feed(
+                host.clone(),
+                HostEvent::Reset {
+                    sessions: Vec::new(),
+                },
+            ))
+            .await;
+        let step =
+            fleet_events_until(&mut events, |e| matches!(e, FleetEvent::Sessions { .. })).await;
+        let live_at = step
+            .iter()
+            .position(|e| matches!(e, FleetEvent::SessionsLive { live: true, .. }))
+            .expect("the snapshot makes the sessions live");
+        let sessions_at = step
+            .iter()
+            .position(|e| matches!(e, FleetEvent::Sessions { .. }))
+            .expect("the snapshot is sent");
+        assert!(live_at < sessions_at, "the flag must precede the snapshot");
+
+        fleet
+            .send(Input::Link(
+                host.clone(),
+                LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0,
+                },
+            ))
+            .await;
+        let step = fleet_events_until(&mut events, |e| matches!(e, FleetEvent::Link { .. })).await;
+        let lost_at = step
+            .iter()
+            .position(|e| matches!(e, FleetEvent::SessionsLive { live: false, .. }))
+            .expect("a dropped link ends the live sessions");
+        let link_at = step
+            .iter()
+            .position(|e| matches!(e, FleetEvent::Link { .. }))
+            .expect("the link state is sent");
+        assert!(lost_at < link_at, "the flag must precede the link state");
+        assert_eq!(
+            fleet
+                .snapshot()
+                .await
+                .iter()
+                .find(|h| h.host.id == host)
+                .map(|h| h.sessions_live),
+            Some(false)
+        );
     }
 
     /// Every subscription lags at once, 50 times over; the 51st waits for an event. Each lag must

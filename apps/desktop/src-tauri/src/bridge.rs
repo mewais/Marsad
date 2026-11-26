@@ -98,6 +98,9 @@ pub enum SubMessage {
     /// `offline`); events resume from the last cursor once it is `connected` again.
     Link {
         state: &'static str,
+        /// The step a connecting link is at (its progress wording), when it reports one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage: Option<String>,
     },
     /// The subscription ended for good (the daemon refused the topic, or it ended).
     End {
@@ -110,9 +113,17 @@ pub enum SubMessage {
 pub fn link_word(s: &LinkState) -> &'static str {
     match s {
         LinkState::Connected { .. } => "connected",
-        LinkState::Connecting | LinkState::Provisioning { .. } => "connecting",
+        LinkState::Connecting { .. } | LinkState::Provisioning { .. } => "connecting",
         LinkState::Reconnecting { .. } => "reconnecting",
         _ => "offline",
+    }
+}
+
+/// The step a connecting link reports (`None` for every other state, and before the first step).
+pub fn link_stage(s: &LinkState) -> Option<String> {
+    match s {
+        LinkState::Connecting { stage, .. } => stage.clone(),
+        _ => None,
     }
 }
 
@@ -228,8 +239,17 @@ pub async fn rpc_subscribe(
     let mut sub = open_topic(&shell.client, host, topic.clone(), from, params);
     let mut link = shell.client.link().state();
     let task = tokio::spawn(async move {
-        let mut last = link_word(&link.borrow_and_update());
-        if channel.send(SubMessage::Link { state: last }).is_err() {
+        // A change of step is a change of the link as the webview shows it: the word alone
+        // would hide the steps of a connecting link.
+        let (word, stage) = {
+            let s = link.borrow_and_update();
+            (link_word(&s), link_stage(&s))
+        };
+        let mut last = (word, stage.clone());
+        if channel
+            .send(SubMessage::Link { state: word, stage })
+            .is_err()
+        {
             return;
         }
         loop {
@@ -243,12 +263,15 @@ pub async fn rpc_subscribe(
                     if changed.is_err() {
                         SubMessage::End { error: Some(BridgeError::new("not_connected", "the client is gone")) }
                     } else {
-                        let now = link_word(&link.borrow_and_update());
+                        let now = {
+                            let s = link.borrow_and_update();
+                            (link_word(&s), link_stage(&s))
+                        };
                         if now == last {
                             continue;
                         }
-                        last = now;
-                        SubMessage::Link { state: now }
+                        last = now.clone();
+                        SubMessage::Link { state: now.0, stage: now.1 }
                     }
                 }
             };
@@ -335,7 +358,27 @@ mod tests {
         assert_eq!(e.data.unwrap()["marsad_error"], "not_hub");
         let e: BridgeError = ClientError::Call(CallError::Timeout).into();
         assert_eq!(e.code, "timeout");
-        assert_eq!(link_word(&LinkState::Connecting), "connecting");
+        assert_eq!(
+            link_word(&LinkState::Connecting {
+                stage: None,
+                since_ms: 0
+            }),
+            "connecting"
+        );
+        assert_eq!(
+            link_stage(&LinkState::Connecting {
+                stage: Some("starting the host daemon".into()),
+                since_ms: 5,
+            }),
+            Some("starting the host daemon".into())
+        );
+        assert_eq!(
+            link_stage(&LinkState::Connecting {
+                stage: None,
+                since_ms: 0
+            }),
+            None
+        );
         assert_eq!(host(Some(String::new())), None);
     }
 

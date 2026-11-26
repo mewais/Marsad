@@ -208,7 +208,10 @@ impl Registry {
             .host_upserted(
                 entry.clone(),
                 FleetLink::Remote {
-                    state: LinkState::Connecting,
+                    state: LinkState::Connecting {
+                        stage: None,
+                        since_ms: 0,
+                    },
                 },
             )
             .await;
@@ -253,7 +256,7 @@ impl Registry {
             return Err(MarsadError::invalid("a host needs a name"));
         }
         if let HostKind::Wsl { distro } = &draft.kind {
-            check_wsl_distro(distro).await?;
+            super::wsl::check_distro(None, distro).await?;
         }
         let taken = |id: &HostId| self.get(id).is_some();
         let id = match draft.id {
@@ -298,9 +301,6 @@ impl Registry {
     }
 
     pub async fn update(&self, entry: HostEntry) -> Result<HostEntry, MarsadError> {
-        if let HostKind::Wsl { distro } = &entry.kind {
-            check_wsl_distro(distro).await?;
-        }
         let _edit = self.inner.edits.lock().await;
         let Some(old) = self.get(&entry.id) else {
             return Err(MarsadError::NotFound {
@@ -309,6 +309,15 @@ impl Registry {
         };
         if entry.id == self.inner.local.id || matches!(entry.kind, HostKind::Local) {
             return Err(MarsadError::invalid("the local host cannot be changed"));
+        }
+        if let HostKind::Wsl { distro } = &entry.kind {
+            // The distribution the host already has was checked when it was chosen: only a new
+            // one is looked up.
+            let previous = match &old.kind {
+                HostKind::Wsl { distro } => Some(distro.as_str()),
+                _ => None,
+            };
+            super::wsl::check_distro(previous, distro).await?;
         }
         let mut entry = entry;
         entry.derive_local_files();
@@ -346,7 +355,10 @@ impl Registry {
                 .hub
                 .link(&entry.id)
                 .map(|s| s.current_state())
-                .unwrap_or(LinkState::Connecting);
+                .unwrap_or(LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0,
+                });
             self.inner
                 .fleet
                 .host_upserted(entry.clone(), FleetLink::Remote { state })
@@ -447,31 +459,37 @@ impl Registry {
     /// connection, the sign-out still stands (the link is dropped and waits for the user), but
     /// the call fails and the connection stays tracked: it is still open.
     pub async fn signout(&self, id: &HostId) -> Result<(), MarsadError> {
-        let _edit = self.inner.edits.lock().await;
-        let mut entry = self.get(id).ok_or_else(|| MarsadError::NotFound {
-            what: format!("host {id}"),
-        })?;
-        if !Masters::applies(&entry) {
-            return Err(MarsadError::invalid(
-                "this host has no shared ssh connection to sign out of",
-            ));
-        }
-        if self.inner.hub.link(id).is_none() {
-            return Err(MarsadError::NotFound {
-                what: format!("link to {id}"),
-            });
-        }
-        // First the user's word, so that nothing started in between signs in again; a prompt
-        // or click of the host is void.
-        self.inner.prompts.forget(id);
-        self.inner.masters.mark_signed_out(id);
-        entry.signed_out = true;
-        self.inner.store.put_host(entry.clone()).await?;
-        self.inner
-            .entries
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(entry.id.clone(), entry.clone());
+        // The sign-out is recorded under the lock; ending the connection is ssh's work and can
+        // be slow (a master that does not answer), so it runs after the lock is released: no
+        // edit waits for it.
+        let entry = {
+            let _edit = self.inner.edits.lock().await;
+            let mut entry = self.get(id).ok_or_else(|| MarsadError::NotFound {
+                what: format!("host {id}"),
+            })?;
+            if !Masters::applies(&entry) {
+                return Err(MarsadError::invalid(
+                    "this host has no shared ssh connection to sign out of",
+                ));
+            }
+            if self.inner.hub.link(id).is_none() {
+                return Err(MarsadError::NotFound {
+                    what: format!("link to {id}"),
+                });
+            }
+            // First the user's word, so that nothing started in between signs in again; a prompt
+            // or click of the host is void.
+            self.inner.prompts.forget(id);
+            self.inner.masters.mark_signed_out(id);
+            entry.signed_out = true;
+            self.inner.store.put_host(entry.clone()).await?;
+            self.inner
+                .entries
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(entry.id.clone(), entry.clone());
+            entry
+        };
         let ended = self
             .inner
             .masters
@@ -483,8 +501,10 @@ impl Registry {
         if ended != MasterExitOutcome::Ended {
             self.inner.hub.reconnect_now(id);
         }
-        // Record the flag with the fleet state that follows from the supervisor.
+        // Record the flag with the fleet state that follows from the supervisor. The entry is read
+        // again: an edit may have landed while the connection was ending.
         let state = self.link_state(id);
+        let entry = self.get(id).unwrap_or(entry);
         self.inner
             .fleet
             .host_upserted(entry, FleetLink::Remote { state })
@@ -505,7 +525,10 @@ impl Registry {
             .hub
             .link(id)
             .map(|s| s.current_state())
-            .unwrap_or(LinkState::Connecting)
+            .unwrap_or(LinkState::Connecting {
+                stage: None,
+                since_ms: 0,
+            })
     }
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
@@ -562,7 +585,10 @@ impl Registry {
             .hub
             .link(&entry.id)
             .map(|s| s.current_state())
-            .unwrap_or(LinkState::Connecting);
+            .unwrap_or(LinkState::Connecting {
+                stage: None,
+                since_ms: 0,
+            });
         self.inner
             .fleet
             .host_upserted(entry, FleetLink::Remote { state })
@@ -604,29 +630,6 @@ impl Registry {
             source: Some(path.display().to_string()),
         }
     }
-}
-
-/// A WSL host needs a Windows hub with WSL and a distribution of that name (when the list can
-/// be read; a list that cannot be read leaves the check to the connection).
-async fn check_wsl_distro(distro: &str) -> Result<(), MarsadError> {
-    if distro.trim().is_empty() {
-        return Err(MarsadError::invalid("pick a WSL distribution"));
-    }
-    let list = super::wsl::distros().await;
-    if !list.available {
-        return Err(MarsadError::invalid(
-            list.problem
-                .unwrap_or_else(|| "WSL is not available here".into()),
-        ));
-    }
-    if !list.distros.is_empty() && !list.distros.iter().any(|d| d.name == distro) {
-        let names: Vec<&str> = list.distros.iter().map(|d| d.name.as_str()).collect();
-        return Err(MarsadError::invalid(format!(
-            "WSL has no distribution named {distro:?}; installed: {}",
-            names.join(", ")
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -757,6 +760,41 @@ mod tests {
         let control = h.masters.path(&entry).unwrap();
         let started = h.masters.begin_signin(&entry, &control).await;
         assert!(h.masters.signed_in(id, started));
+    }
+
+    /// A WSL distribution is looked up when a host is added and when its distribution changes, and
+    /// a failed lookup changes nothing. Off Windows WSL is unavailable, so every lookup fails
+    /// (on Windows the test would depend on the machine's distributions, so it does not run).
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_wsl_distribution_is_looked_up_when_it_is_chosen_or_changed() {
+        let h = harness("wsl-lookup").await;
+        let wsl = HostKind::Wsl {
+            distro: "Ubuntu".into(),
+        };
+        let added = h
+            .registry
+            .add(HostDraft {
+                name: "wsl".into(),
+                kind: wsl.clone(),
+                id: Some(HostId::new("wsl")),
+            })
+            .await;
+        assert!(
+            added.is_err(),
+            "a host is not added on an unavailable distribution"
+        );
+        assert!(h.registry.get(&HostId::new("wsl")).is_none());
+
+        let id = add_ssh(&h, "box").await;
+        let mut entry = h.registry.get(&id).unwrap();
+        entry.kind = wsl;
+        assert!(h.registry.update(entry).await.is_err());
+        let kept = h.registry.get(&id).unwrap();
+        assert!(
+            matches!(kept.kind, HostKind::Ssh { .. }),
+            "a refused update keeps the host as it was"
+        );
     }
 
     async fn fleet_host(fleet: &Fleet, id: &HostId) -> FleetHost {

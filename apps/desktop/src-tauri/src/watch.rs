@@ -322,7 +322,10 @@ fn apply(hosts: &mut Vec<FleetHost>, ev: &FleetEvent) {
                 None => hosts.push(FleetHost {
                     host: host.clone(),
                     link: marsad_proto::fleet::FleetLink::Remote {
-                        state: marsad_proto::LinkState::Connecting,
+                        state: marsad_proto::LinkState::Connecting {
+                            stage: None,
+                            since_ms: 0,
+                        },
                     },
                     sessions_live: false,
                     sessions: Vec::new(),
@@ -338,6 +341,12 @@ fn apply(hosts: &mut Vec<FleetHost>, ev: &FleetEvent) {
                 h.link = marsad_proto::fleet::FleetLink::Remote {
                     state: state.clone(),
                 };
+            }
+        }
+        // The hub decides whether a host's sessions are live; this only records it.
+        FleetEvent::SessionsLive { host, live } => {
+            if let Some(h) = hosts.iter_mut().find(|h| h.host.id == *host) {
+                h.sessions_live = *live;
             }
         }
         // Sessions are not part of the connection state.
@@ -374,7 +383,10 @@ mod tests {
     fn a_failed_fleet_feed_is_started_again_only_when_the_hub_link_is_connected() {
         let hello = wasit_control::Hello::new("test", "marsad-desktop", "gui");
         assert!(resubscribes_on(&LinkState::Connected { hello }));
-        assert!(!resubscribes_on(&LinkState::Connecting));
+        assert!(!resubscribes_on(&LinkState::Connecting {
+            stage: None,
+            since_ms: 0
+        }));
         assert!(!resubscribes_on(&LinkState::Failed {
             reason: "cannot start marsad-agent".into(),
             problem: None,
@@ -392,9 +404,66 @@ mod tests {
         assert_eq!(after_failure(&up, true), AfterFailure::WaitForLink);
         // Without a connected hub link there is nothing to ask.
         assert_eq!(
-            after_failure(&LinkState::Connecting, false),
+            after_failure(
+                &LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0
+                },
+                false
+            ),
             AfterFailure::WaitForLink
         );
+    }
+
+    #[test]
+    fn the_hub_decides_whether_a_hosts_sessions_are_live() {
+        let entry = |id: &str| marsad_proto::hosts::HostEntry {
+            id: HostId::new(id),
+            name: id.to_string(),
+            kind: marsad_proto::hosts::HostKind::Wsl {
+                distro: "Ubuntu".into(),
+            },
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        };
+        let mut hosts = Vec::new();
+        apply(&mut hosts, &FleetEvent::HostUpserted { host: entry("gpu") });
+        // Added as not live: nothing marks it live until the hub says so.
+        assert!(!hosts[0].sessions_live);
+        apply(
+            &mut hosts,
+            &FleetEvent::SessionsLive {
+                host: HostId::new("gpu"),
+                live: true,
+            },
+        );
+        assert!(hosts[0].sessions_live);
+        apply(
+            &mut hosts,
+            &FleetEvent::SessionsLive {
+                host: HostId::new("gpu"),
+                live: false,
+            },
+        );
+        assert!(
+            !hosts[0].sessions_live,
+            "a lost feed is applied as the hub sent it"
+        );
+        // A flag for an unknown host changes nothing.
+        apply(
+            &mut hosts,
+            &FleetEvent::SessionsLive {
+                host: HostId::new("other"),
+                live: true,
+            },
+        );
+        assert_eq!(hosts.len(), 1);
+        assert!(!hosts[0].sessions_live);
     }
 
     #[test]

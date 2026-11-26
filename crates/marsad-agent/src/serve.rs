@@ -153,6 +153,9 @@ pub async fn serve(o: Options) -> ExitCode {
             );
         }
     };
+    // Shared lock on the run directory for the daemon's whole life, so a temporary-directory
+    // cleaner cannot age away the sockets and locks it holds there (bound to this scope).
+    let _run_dir_guard = wasit_runtime::machine::hold_dir_guard(&layout.run);
     // This process is the machine's daemon: its records move to `daemon.ndjson`.
     diag::promote_to_daemon();
     diag::announce();
@@ -474,11 +477,11 @@ async fn start_hub(
     };
     let mut hcfg =
         HubConfig::new(Hello::new(build, host_id, "hub").with_machine(o.layout().machine.clone()));
-    // No bound on an attempt as a whole (U3/G9): its steps are bounded by progress (each waits
-    // for the host's next line or the connection's end, which ssh's keep-alives detect), its
-    // prompts by the user's deadline. A slow login, helper start or upload only takes longer.
-    // (tokio maps a deadline past its range to "never".)
-    hcfg.supervise.connect_timeout = Duration::MAX;
+    // No bound on an attempt as a whole (U3/G9): `None` arms no timer. Its steps are bounded by
+    // progress (each waits for the host's next line or the connection's end, which ssh's
+    // keep-alives detect), its prompts by the user's deadline. A slow login, helper start or
+    // upload only takes longer.
+    hcfg.supervise.connect_timeout = None;
     // A daemon of another build is restarted inside the attempt (the bootstrap's decision):
     // no provisioning round after the hello.
     let hub = Hub::new(hcfg, Arc::new(connector), None);

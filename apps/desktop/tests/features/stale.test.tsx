@@ -56,7 +56,7 @@ describe("sessions of a host that has not delivered its list over the current li
     await waitFor(() => expect(row("pdf-renderer-worker")).toHaveAttribute("data-stale"));
     expect(row("pdf-renderer-worker").querySelector(".st svg.spin")).toBeNull();
     // A host that is connected again but has not yet sent its list is still last known.
-    act(() => backend.setLink("hz", { state: "connecting" }));
+    act(() => backend.setLink("hz", { state: "connecting", since_ms: Date.now() }));
     expect(row("pdf-renderer-worker")).toHaveAttribute("data-stale");
     // Local sessions were never affected.
     expect(row("migrate-auth-middleware")).not.toHaveAttribute("data-stale");

@@ -93,6 +93,13 @@ pub enum FleetEvent {
         host: HostId,
         state: LinkState,
     },
+    /// A host's sessions became live (`true`: its daemon delivered its session list over its
+    /// current link) or last known (`false`: its link dropped, or its feed was refused). The
+    /// hub decides this flag ([`FleetHost::sessions_live`]); clients only apply it.
+    SessionsLive {
+        host: HostId,
+        live: bool,
+    },
     /// A host's daemon delivered its complete session list (after (re)connecting).
     Sessions {
         host: HostId,

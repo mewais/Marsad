@@ -314,6 +314,40 @@ describe("the sign-in dialog", () => {
     expect(screen.getByLabelText("Password or passphrase")).toBeInTheDocument();
   }, 10_000);
 
+  it("masks every answer but the host-key confirmation, whatever the words the daemon's guess gave it", async () => {
+    // A password that mentions a token used to be classed as a one-time code and shown in clear.
+    const { user, backend } = await open();
+    const dlg = () => screen.getByRole("dialog", { name: "Sign in to gpu-box" });
+    act(() => backend.setAuthPrompt("gpu", { prompt: "Password for token-svc: ", kind: "code", attempt: 1 }));
+    await user.click(await screen.findByRole("button", { name: "Show the next question" }));
+    const field = await within(dlg()).findByLabelText("One-time code");
+    expect(field).toHaveAttribute("type", "password");
+    expect(within(dlg()).queryByRole("textbox")).toBeNull();
+  });
+
+  it("a question the guess calls info still takes a masked answer (no question is answered by its words alone)", async () => {
+    const { user, backend } = await open();
+    const dlg = () => screen.getByRole("dialog", { name: "Sign in to gpu-box" });
+    act(() => backend.setAuthPrompt("gpu", { prompt: "Enter the PIN: ", kind: "info", attempt: 1 }));
+    await user.click(await screen.findByRole("button", { name: "Show the next question" }));
+    const field = (await within(dlg()).findByLabelText("Answer")) as HTMLInputElement;
+    expect(field).toHaveAttribute("type", "password");
+    await user.type(field, "4321");
+    await user.click(within(dlg()).getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(authAnswers(backend).map((a) => a.answer)).toEqual(["4321"]));
+  });
+
+  it("the host-key confirmation alone has no answer field: its buttons are yes and no", async () => {
+    const { user, backend } = await open();
+    const dlg = () => screen.getByRole("dialog", { name: "Sign in to gpu-box" });
+    act(() => backend.setAuthPrompt("gpu", { prompt: "Are you sure you want to continue connecting (yes/no)?", kind: "confirm", attempt: 1 }));
+    await user.click(await screen.findByRole("button", { name: "Show the next question" }));
+    await waitFor(() => expect(within(dlg()).getByTestId("auth-prompt-text")).toHaveTextContent(/continue connecting/));
+    expect(within(dlg()).queryByRole("textbox")).toBeNull();
+    expect(dlg().querySelector("input[type=password]")).toBeNull();
+    expect(within(dlg()).getByRole("button", { name: "Yes" })).toBeInTheDocument();
+  });
+
   it("counts down to the daemon's own deadline, not to a guess", async () => {
     const backend = quietBackend({ now: () => Date.now() - 90_000 });
     mountApp("/config", backend);

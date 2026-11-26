@@ -57,13 +57,29 @@ pub struct Layout {
     pub run: PathBuf,
 }
 
+/// This machine's key: the environment override, else the machine's own identity (see
+/// `wasit_runtime::machine::machine_key`).
+pub fn machine_key() -> io::Result<String> {
+    let key_env = std::env::var(MACHINE_KEY_ENV).ok();
+    machine::machine_key(key_env.as_deref())
+}
+
 impl Layout {
     /// Resolve (and create the runtime directory of) the layout for `root`. `run` overrides the
     /// runtime directory itself.
     pub fn resolve(root: impl Into<PathBuf>, run: Option<PathBuf>) -> io::Result<Layout> {
+        Self::resolve_with_machine(root, run, machine_key()?)
+    }
+
+    /// [`Layout::resolve`] for a machine key already known (see [`machine_key`]). Asking the
+    /// machine for its key runs processes on some platforms; a caller that resolves often keeps
+    /// the key and calls this, which still checks and creates the runtime directory each time.
+    pub fn resolve_with_machine(
+        root: impl Into<PathBuf>,
+        run: Option<PathBuf>,
+        machine: String,
+    ) -> io::Result<Layout> {
         let root = root.into();
-        let key_env = std::env::var(MACHINE_KEY_ENV).ok();
-        let machine = machine::machine_key(key_env.as_deref())?;
         let run = match run {
             Some(r) => {
                 machine::ensure_private_dir(&r)?;

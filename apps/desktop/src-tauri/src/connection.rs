@@ -117,7 +117,13 @@ mod tests {
 
     #[test]
     fn the_daemon_link_carries_its_reason() {
-        let up = ConnectionState::new(&LinkState::Connecting, &[]);
+        let up = ConnectionState::new(
+            &LinkState::Connecting {
+                stage: None,
+                since_ms: 0,
+            },
+            &[],
+        );
         assert_eq!((up.daemon, up.daemon_error), ("connecting", None));
         let failed = ConnectionState::new(
             &LinkState::Failed {
@@ -131,7 +137,14 @@ mod tests {
             failed.daemon_error.as_deref(),
             Some("cannot start marsad-agent")
         );
-        let json = serde_json::to_value(ConnectionState::new(&LinkState::Connecting, &[])).unwrap();
+        let json = serde_json::to_value(ConnectionState::new(
+            &LinkState::Connecting {
+                stage: None,
+                since_ms: 0,
+            },
+            &[],
+        ))
+        .unwrap();
         assert!(json.get("daemon_error").is_none());
     }
 }

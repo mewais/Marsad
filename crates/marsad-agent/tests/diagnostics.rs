@@ -2611,7 +2611,10 @@ async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
                 machine: None,
             },
             marsad_proto::fleet::FleetLink::Remote {
-                state: marsad_proto::LinkState::Connecting,
+                state: marsad_proto::LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0,
+                },
             },
         )
         .await;

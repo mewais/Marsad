@@ -171,7 +171,9 @@ fn link_verdict(was_connected: Option<bool>, now: &LinkState) -> Option<LinkVerd
     if was_connected == Some(true) && !now.is_connected() {
         let retrying = matches!(
             now,
-            LinkState::Reconnecting { .. } | LinkState::Connecting | LinkState::Provisioning { .. }
+            LinkState::Reconnecting { .. }
+                | LinkState::Connecting { .. }
+                | LinkState::Provisioning { .. }
         );
         return Some(LinkVerdict::Lost { retrying });
     }
@@ -399,6 +401,7 @@ impl Tracker {
                 self.needs_you.remove(&key);
             }
             FleetEvent::AuthPrompt { .. }
+            | FleetEvent::SessionsLive { .. }
             | FleetEvent::Git { .. }
             | FleetEvent::FeedError { .. } => {}
         }
@@ -511,7 +514,10 @@ mod tests {
         t.apply(&FleetEvent::Reset {
             hosts: vec![fleet_host(
                 FleetLink::Remote {
-                    state: LinkState::Connecting,
+                    state: LinkState::Connecting {
+                        stage: None,
+                        since_ms: 0,
+                    },
                 },
                 vec![first],
             )],
@@ -756,7 +762,15 @@ mod tests {
         t.apply(&link(&h, connected()));
         assert_eq!(t.apply(&link(&h, auth_needed(true, None))).len(), 1);
         // The user clicks: the attempt runs; it fails and the host is held again: no new note.
-        assert!(t.apply(&link(&h, LinkState::Connecting)).is_empty());
+        assert!(t
+            .apply(&link(
+                &h,
+                LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0
+                }
+            ))
+            .is_empty());
         assert_eq!(
             t.attention().hosts,
             0,
@@ -764,7 +778,15 @@ mod tests {
         );
         assert!(t.apply(&link(&h, auth_needed(true, None))).is_empty());
         // Cancelled: not held, so no note and nothing waits.
-        assert!(t.apply(&link(&h, LinkState::Connecting)).is_empty());
+        assert!(t
+            .apply(&link(
+                &h,
+                LinkState::Connecting {
+                    stage: None,
+                    since_ms: 0
+                }
+            ))
+            .is_empty());
         assert!(t.apply(&link(&h, auth_needed(false, None))).is_empty());
         assert_eq!(t.attention().hosts, 0);
         // Connected, then dropped again: one more.

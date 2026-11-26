@@ -913,6 +913,7 @@ impl Actor {
                 return;
             }
             FleetEvent::AuthPrompt { .. }
+            | FleetEvent::SessionsLive { .. }
             | FleetEvent::Git { .. }
             | FleetEvent::FeedError { .. } => return,
         }
@@ -1422,7 +1423,10 @@ mod tests {
     /// The push is not sent while the host is down: the first attempt waits for the connect.
     #[tokio::test]
     async fn topology_is_pushed_on_connect() {
-        let (tx, rx) = watch::channel(LinkState::Connecting);
+        let (tx, rx) = watch::channel(LinkState::Connecting {
+            stage: None,
+            since_ms: 0,
+        });
         let sends = Arc::new(Mutex::new(0usize));
         let counted = sends.clone();
         let push = tokio::spawn(push_when_connected(

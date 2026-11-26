@@ -190,7 +190,10 @@ mod tests {
 
     #[test]
     fn the_link_is_recorded_by_state_and_attempt_with_the_text_kept_out() {
-        let up = hub_link(&LinkState::Connecting);
+        let up = hub_link(&LinkState::Connecting {
+            stage: None,
+            since_ms: 0,
+        });
         assert!(matches!(
             &up,
             AppEvent::HubLink {

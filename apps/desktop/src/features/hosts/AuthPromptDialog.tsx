@@ -92,7 +92,10 @@ export function AuthPromptDialog({ prompt, hostName, others, settle }: { prompt:
     void send(pk, "Could not send your answer", () => api.hosts.authAnswer({ host: prompt.host, id: prompt.id, answer: a }));
   };
   const cancel = () => void send(`${pk}:cancel`, "Could not cancel the sign-in", () => api.hosts.authCancel({ host: prompt.host, id: prompt.id }));
-  const typed = prompt.kind === "secret" || prompt.kind === "code";
+  // Every question but ssh's own host-key confirmation takes a typed answer, masked. The kind only
+  // words the field; it never decides whether the answer is hidden (the daemon's guess at the kind
+  // is from the prompt's text, and a password can mention a token).
+  const typed = prompt.kind !== "confirm";
   const busy = answering || cancelling;
 
   return (
@@ -119,8 +122,8 @@ export function AuthPromptDialog({ prompt, hostName, others, settle }: { prompt:
         <div className="eyebrow">{hostName} asks</div>
         <pre ref={text} tabIndex={-1} className="authp-text" data-testid="auth-prompt-text">{prompt.prompt}</pre>
         {typed ? (
-          <input ref={input} className="authp-input" type={prompt.kind === "secret" ? "password" : "text"} inputMode={prompt.kind === "code" ? "numeric" : undefined} readOnly={busy}
-            autoComplete={prompt.kind === "code" ? "one-time-code" : "off"} aria-label={prompt.kind === "secret" ? "Password or passphrase" : "One-time code"} value={value} onChange={(e) => setValue(e.target.value)} spellCheck={false} />
+          <input ref={input} className="authp-input" type="password" inputMode={prompt.kind === "code" ? "numeric" : undefined} readOnly={busy}
+            autoComplete={prompt.kind === "code" ? "one-time-code" : "off"} aria-label={fieldLabel(prompt.kind)} value={value} onChange={(e) => setValue(e.target.value)} spellCheck={false} />
         ) : null}
         {prompt.kind === "info" ? <div className="authp-wait" role="status"><Icon name="working" size="sm" spin className="c-working" />Waiting for approval on your device…</div> : null}
         {refused ? <div className="authp-retry c-failed" role="alert" data-testid="auth-refused"><Icon name="warn" size="sm" />{refused}</div> : null}
@@ -132,6 +135,13 @@ export function AuthPromptDialog({ prompt, hostName, others, settle }: { prompt:
       </form>
     </Dialog>
   );
+}
+
+/** The field's name, by what the question seems to ask (wording only). */
+function fieldLabel(kind: AuthPrompt["kind"]): string {
+  if (kind === "code") return "One-time code";
+  if (kind === "secret") return "Password or passphrase";
+  return "Answer";
 }
 
 /** The question on screen was withdrawn by the daemon (its attempt ended) before the user acted on it. */

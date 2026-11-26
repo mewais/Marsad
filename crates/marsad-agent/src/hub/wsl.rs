@@ -147,9 +147,52 @@ pub fn parse_quiet(text: &str) -> Vec<WslDistro> {
         .collect()
 }
 
+/// Checks a WSL host's distribution `distro` when the host is added or its distribution changes.
+/// `previous` is the distribution the host used before (`None` for a new host): a host that keeps
+/// its distribution (a rename, any other edit) is not checked again, so `wsl.exe` (which can
+/// start the WSL service) runs only when there is a distribution to look for. A distribution
+/// chosen earlier was checked then.
+pub async fn check_distro(
+    previous: Option<&str>,
+    distro: &str,
+) -> Result<(), marsad_proto::MarsadError> {
+    use marsad_proto::MarsadError;
+    if distro.trim().is_empty() {
+        return Err(MarsadError::invalid("pick a WSL distribution"));
+    }
+    if previous == Some(distro) {
+        return Ok(());
+    }
+    let list = distros().await;
+    if !list.available {
+        return Err(MarsadError::invalid(
+            list.problem
+                .unwrap_or_else(|| "WSL is not available here".into()),
+        ));
+    }
+    if !list.distros.is_empty() && !list.distros.iter().any(|d| d.name == distro) {
+        let names: Vec<&str> = list.distros.iter().map(|d| d.name.as_str()).collect();
+        return Err(MarsadError::invalid(format!(
+            "WSL has no distribution named {distro:?}; installed: {}",
+            names.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_kept_distribution_is_not_looked_up_again() {
+        // Off Windows `wsl.exe` cannot run, so any lookup reports WSL unavailable: a host that
+        // keeps its distribution must pass without one.
+        assert!(check_distro(Some("Ubuntu"), "Ubuntu").await.is_ok());
+        assert!(check_distro(Some("Ubuntu"), "Debian").await.is_err());
+        assert!(check_distro(None, "Ubuntu").await.is_err());
+        assert!(check_distro(Some("Ubuntu"), "  ").await.is_err());
+    }
 
     fn utf16(s: &str) -> Vec<u8> {
         s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()

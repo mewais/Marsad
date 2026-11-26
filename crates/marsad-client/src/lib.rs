@@ -15,7 +15,7 @@ mod diag;
 
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use marsad_proto::agentconfig::{
@@ -106,6 +106,26 @@ pub struct ClientConfig {
     /// How long a call waits for a disconnected link.
     pub wait_connected: Duration,
     pub supervise: wasit_control::SupervisedConfig,
+    /// This machine's key, asked for once (see [`MachineKey`]).
+    machine: Arc<MachineKey>,
+}
+
+/// This machine's key, asked for once per configuration. Asking the machine runs processes
+/// (`ioreg`, `reg`, `getconf`), so it must not run on every dial. The clones of a configuration
+/// share it: the key depends on the machine, not on the paths.
+#[derive(Default, Debug)]
+struct MachineKey(OnceLock<Result<String, (std::io::ErrorKind, String)>>);
+
+impl MachineKey {
+    fn get_or_resolve(
+        &self,
+        resolve: impl FnOnce() -> std::io::Result<String>,
+    ) -> std::io::Result<String> {
+        self.0
+            .get_or_init(|| resolve().map_err(|e| (e.kind(), e.to_string())))
+            .clone()
+            .map_err(|(kind, msg)| std::io::Error::new(kind, msg))
+    }
 }
 
 impl ClientConfig {
@@ -122,6 +142,7 @@ impl ClientConfig {
             deadline: Duration::from_secs(120),
             wait_connected: Duration::from_secs(30),
             supervise: wasit_control::SupervisedConfig::default(),
+            machine: Arc::default(),
         }
     }
 
@@ -142,8 +163,18 @@ impl ClientConfig {
 
     /// This machine's layout of `data_dir` with the runtime directory of `run_dir`: the one
     /// place the client computes it.
+    ///
+    /// The machine key is asked for once; the runtime directory is checked and created on every
+    /// call (it may have been removed meanwhile, e.g. by a temp-file cleaner).
     pub fn layout(&self) -> std::io::Result<marsad_proto::layout::Layout> {
-        marsad_proto::layout::Layout::resolve(self.data_dir.clone(), self.run_dir.clone())
+        let machine = self
+            .machine
+            .get_or_resolve(marsad_proto::layout::machine_key)?;
+        marsad_proto::layout::Layout::resolve_with_machine(
+            self.data_dir.clone(),
+            self.run_dir.clone(),
+            machine,
+        )
     }
 
     pub fn endpoint(&self) -> Endpoint {
@@ -232,7 +263,11 @@ async fn dial(
     cfg: Arc<ClientConfig>,
     starting: Arc<tokio::sync::Mutex<()>>,
 ) -> Result<ControlClient, ConnectError> {
-    let ep = cfg.endpoint();
+    // The first dial asks the machine for its key (a process on some platforms): off the async path.
+    let endpoint_cfg = cfg.clone();
+    let ep = tokio::task::spawn_blocking(move || endpoint_cfg.endpoint())
+        .await
+        .map_err(|e| ConnectError::Io(format!("endpoint: {e}")))?;
     let opts = ClientOptions::new(cfg.hello.clone());
     let attempt = |ep: Endpoint| async move {
         tokio::time::timeout(Duration::from_secs(5), ep.connect())
@@ -987,5 +1022,61 @@ impl MarsadClient {
         r: EdgeHistoryRequest,
     ) -> Result<EdgeHistoryPage, ClientError> {
         self.call(None, methods::WS_HISTORY, r).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn the_machine_key_is_asked_once_and_every_clone_sees_it() {
+        let asked = Cell::new(0);
+        let key = MachineKey::default();
+        let first = key.get_or_resolve(|| {
+            asked.set(asked.get() + 1);
+            Ok("machine-a".to_string())
+        });
+        let again = key.get_or_resolve(|| {
+            asked.set(asked.get() + 1);
+            Ok("machine-b".to_string())
+        });
+        assert_eq!(asked.get(), 1, "the lookup ran again");
+        assert_eq!(first.expect("key"), "machine-a");
+        assert_eq!(again.expect("key"), "machine-a");
+    }
+
+    #[test]
+    fn a_failed_lookup_is_kept_with_its_kind() {
+        let key = MachineKey::default();
+        let e = key
+            .get_or_resolve(|| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no ioreg",
+                ))
+            })
+            .expect_err("the lookup failed");
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        assert!(key.get_or_resolve(|| Ok("late".into())).is_err());
+    }
+
+    #[test]
+    fn the_runtime_directory_is_recreated_when_it_was_removed() {
+        let base = std::env::temp_dir().join(format!("marsad-client-test-{}", std::process::id()));
+        let run = base.join("run");
+        let cfg = ClientConfig {
+            run_dir: Some(run.clone()),
+            ..ClientConfig::new(base.join("data"), Hello::new("test", "gui-test", "gui"))
+        };
+        cfg.layout().expect("first layout");
+        std::fs::remove_dir_all(&run).expect("remove the runtime directory");
+        let second = cfg.layout().expect("second layout");
+        assert!(
+            second.run.is_dir(),
+            "the runtime directory was not recreated"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

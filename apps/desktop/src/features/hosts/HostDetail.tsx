@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
 import { askWords, backgroundWords, driverVersionState, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, signOutPendingKey, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
-import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
+import { Button, ConfirmDialog, ConnState, ConnectingWords, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, feedReason, linkSub } from "./linkText";
 import { SignInButton } from "./SignInButton";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
@@ -78,7 +78,7 @@ export function HostDetail({ host }: { host: HostView }) {
     );
   } else if (st?.state === "provisioning" || st?.state === "connecting") {
     card = (
-      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{lv.detail}</div>
+      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{st.state === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} /> : lv.detail}</div>
         <div className="small">{st.state === "provisioning" ? (st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol.") : "Opening the connection."}</div>
         <div className="bar w indet" aria-hidden="true"><i /></div></div>
     );

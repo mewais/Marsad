@@ -45,7 +45,8 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
         ? { ...cur, entry: e.host }
         : {
             entry: e.host,
-            link: e.host.kind.kind === "local" ? { link: "local" } : { link: "remote", state: { state: "connecting" } },
+            // Until the hub's own `link` event says otherwise (it follows the upsert at once).
+            link: e.host.kind.kind === "local" ? { link: "local" } : { link: "remote", state: { state: "connecting", since_ms: 0 } },
             sessionsLive: false,
             authPrompt: null,
             feedError: null,
@@ -62,8 +63,13 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
     case "link": {
       const cur = s.hosts[e.host];
       if (!cur || cur.link.link === "local") return s;
-      const sessionsLive = e.state.state === "connected" ? cur.sessionsLive : false;
-      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state }, sessionsLive } } };
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state } } } };
+    }
+    case "sessions_live": {
+      // The hub's one statement of whether a host's sessions are live; the client never derives it.
+      const cur = s.hosts[e.host];
+      if (!cur) return s;
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, sessionsLive: e.live } } };
     }
     case "git":
       return { ...s, git: { ...s.git, [e.host]: { ...s.git[e.host], [e.summary.cwd]: e.summary } } };
@@ -77,7 +83,7 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       for (const k of Object.keys(sessions)) if (k.startsWith(e.host + "/")) delete sessions[k];
       for (const snap of e.sessions) sessions[sessionKey(e.host, snap.id)] = snap;
       const cur = s.hosts[e.host];
-      const hosts = cur ? { ...s.hosts, [e.host]: { ...cur, sessionsLive: true, feedError: null } } : s.hosts;
+      const hosts = cur ? { ...s.hosts, [e.host]: { ...cur, feedError: null } } : s.hosts;
       return withDrivers({ ...s, sessions, hosts, pending: prunePending(s.pending, sessions) });
     }
     case "session_upserted": {
@@ -93,8 +99,7 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       const cur = s.hosts[e.host];
       if (!cur) return s;
       const feedError = e.error ?? null;
-      const sessionsLive = feedError ? false : cur.sessionsLive;
-      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, feedError, sessionsLive } } };
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, feedError } } };
     }
     default:
       unknownEvent("fleet", e);

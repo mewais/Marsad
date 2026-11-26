@@ -72,6 +72,28 @@ impl Output {
     }
 }
 
+/// The most stderr kept from a command (the rest is read and discarded).
+const STDERR_CAP: usize = 64 * 1024;
+
+/// Read `r` to its end, keeping the first `cap` bytes. Reading continues past the cap: a child
+/// whose pipe is no longer read blocks on it, so a chatty child must never be cut off here. A
+/// read error ends the stream (what was read so far is kept).
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(r: &mut R, cap: usize) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        match r.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let room = cap.saturating_sub(buf.len());
+                buf.extend_from_slice(&chunk[..n.min(room)]);
+            }
+        }
+    }
+    buf
+}
+
 /// Run a command to completion under a deadline (killed on timeout), optionally feeding
 /// `stdin` from a file. stdout is bounded by `max_stdout` (excess is discarded, the process
 /// still runs to completion).
@@ -83,7 +105,6 @@ pub async fn run(
     deadline: Duration,
     max_stdout: usize,
 ) -> Result<Output, MarsadError> {
-    use tokio::io::AsyncReadExt;
     let (prog, args) = argv
         .split_first()
         .ok_or_else(|| MarsadError::invalid("empty command"))?;
@@ -128,27 +149,18 @@ pub async fn run(
             }
         };
         let read_out = async {
-            let mut buf = Vec::new();
-            if let Some(o) = out.as_mut() {
-                let mut chunk = [0u8; 16 * 1024];
-                loop {
-                    match o.read(&mut chunk).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let room = max_stdout.saturating_sub(buf.len());
-                            buf.extend_from_slice(&chunk[..n.min(room)]);
-                        }
-                    }
-                }
+            match out.as_mut() {
+                Some(o) => read_capped(o, max_stdout).await,
+                None => Vec::new(),
             }
-            buf
         };
         let read_err = async {
-            let mut buf = Vec::new();
-            if let Some(e) = err.as_mut() {
-                // stderr is diagnostics; a read error just ends it.
-                let _ = e.take(64 * 1024).read_to_end(&mut buf).await;
-            }
+            // stderr is diagnostics: it is kept up to the cap, but drained to the end either way
+            // (a child that stops reading its stderr blocks on a full pipe).
+            let buf = match err.as_mut() {
+                Some(e) => read_capped(e, STDERR_CAP).await,
+                None => Vec::new(),
+            };
             // UTF-16LE from Windows tools such as wsl.exe reads as text too.
             wasit_process::decode_console_output(&buf)
         };
@@ -168,5 +180,31 @@ pub async fn run(
                 stderr,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A child that writes far more than the stderr cap before its stdout line: it only finishes
+    /// if stderr keeps being drained past the cap.
+    #[tokio::test]
+    async fn a_chatty_stderr_past_the_cap_does_not_block_the_child() {
+        let argv: Vec<String> = ["sh", "-c", "head -c 1048576 /dev/zero >&2; echo done"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = run(&argv, None, &[], None, Duration::from_secs(60), 1024)
+            .await
+            .expect("the child ran to completion");
+        assert!(out.success(), "exit {:?}", out.code);
+        assert_eq!(out.stdout_str().trim(), "done");
+        // The cap still holds: what is kept is at most the cap, the rest is discarded.
+        assert!(
+            out.stderr.len() <= 64 * 1024,
+            "stderr kept {} bytes",
+            out.stderr.len()
+        );
     }
 }
