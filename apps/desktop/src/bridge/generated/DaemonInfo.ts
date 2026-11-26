@@ -4,7 +4,13 @@ import type { VersionInfo } from "./VersionInfo";
 /**
  * Result of `daemon.info`.
  */
-export type DaemonInfo = { version: VersionInfo, host_id: string, hub: boolean, data_dir: string, pid: number, 
+export type DaemonInfo = { version: VersionInfo, host_id: string, hub: boolean, 
+/**
+ * The hub this daemon serves (`--hub-id`, given by the bootstrap of the hub that started
+ * it); `None` for a daemon started otherwise or by a build before hub ids. A daemon serves
+ * one hub: another hub's bootstrap refuses to take it over while it runs.
+ */
+hub_id?: string, data_dir: string, pid: number, 
 /**
  * The daemon's own executable (also the `shim` and `mcp` entry).
  */

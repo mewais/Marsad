@@ -3,6 +3,8 @@
 //! ```text
 //! marsad-agent serve  [--hub] [--data <dir>] [--run-dir <dir>] [--socket <path>] [--host-id <id>] [options]
 //! marsad-agent bridge [same options]      (starts `serve` with them if no daemon runs)
+//! marsad-agent boot   --host-id <id> --hub-id <hub> [--installed] [same options]
+//!                                         (the remote end of a hub's bootstrap, see `boot.rs`)
 //! marsad-agent stop   [--data <dir>] [--socket <path>]
 //! marsad-agent shim   <wasit-shim arguments>
 //! marsad-agent kilo-bridge -- <cli argv>   (the wrapper a Kilo session's process runs through)
@@ -38,6 +40,10 @@ pub struct Options {
     pub socket: Option<PathBuf>,
     pub host_id: Option<String>,
     pub hub: bool,
+    /// The hub this daemon serves (`serve`, `boot`; see [`marsad_proto::daemon::DaemonInfo`]).
+    pub hub_id: Option<String>,
+    /// `boot`: this run follows an install by the bootstrap (reported as `install=ok`).
+    pub installed: bool,
     pub driver_bin: Vec<(String, String)>,
     pub driver_env: Vec<(String, String, String)>,
     pub handshake_timeout: Option<Duration>,
@@ -92,6 +98,8 @@ impl Options {
                 "--socket" => o.socket = Some(PathBuf::from(val()?)),
                 "--host-id" => o.host_id = Some(val()?),
                 "--hub" => o.hub = true,
+                "--hub-id" => o.hub_id = Some(val()?),
+                "--installed" => o.installed = true,
                 "--driver-bin" => {
                     let v = val()?;
                     let (d, p) = v

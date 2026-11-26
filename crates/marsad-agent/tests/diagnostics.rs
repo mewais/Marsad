@@ -1197,14 +1197,13 @@ mod connect {
         let mut fleet = c.fleet(None);
         let kind = sshd.kind(&sshd.key);
         c.add_host(draft("Box", "box", kind)).await.unwrap();
-        until(&mut fleet, "box connected", |e| {
-            link_is(e, "box", LinkState::is_connected)
-        })
-        .await;
-        // The connect taught the registry the host's machine (the platform came with the
-        // report): wait for it on the fleet, then apply settings explicitly.
-        until(&mut fleet, "the machine learned", |e| {
-            host_is(e, "box", |h| h.machine.is_some())
+        // Connected, and the registry taught the host's machine (from the report, before the
+        // link was up, or after: either order).
+        let (up, known) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
+        until(&mut fleet, "box connected and its machine learned", |e| {
+            up.set(up.get() || link_is(e, "box", LinkState::is_connected));
+            known.set(known.get() || host_is(e, "box", |h| h.machine.is_some()));
+            up.get() && known.get()
         })
         .await;
         let saved = c
@@ -1238,6 +1237,8 @@ mod connect {
                 "boot.report",
                 "boot.action",
                 "boot.uploaded",
+                "boot.report",
+                "boot.action",
                 "boot.ok",
                 "boot.hello",
                 "link.attempt_end",
@@ -1251,24 +1252,36 @@ mod connect {
                 &at["interactive"],
                 &at["armed"]
             ),
-            (&json!("posix"), &json!(true), &json!(false), &json!(false))
+            (
+                &json!("universal"),
+                &json!(true),
+                &json!(false),
+                &json!(false)
+            )
         );
         let pre = step(&trail, "boot.preamble");
         assert_eq!((&pre["lines"], &pre["bytes"]), (&json!(0), &json!(0)));
         assert!(pre.get("shape").is_none());
-        let report = step(&trail, "boot.report");
+        // The script's report, then the installed helper's, each answered once.
+        let all =
+            |ev: &str| -> Vec<&Value> { trail.iter().copied().filter(|r| r["ev"] == ev).collect() };
+        let reports = all("boot.report");
+        let report = reports[0];
         assert_eq!(report["os"], "Linux");
         assert_eq!(report["arch"], std::env::consts::ARCH);
         assert!(
             report.get("installed").is_none(),
             "nothing is installed yet"
         );
-        // Nothing was installed: the hub's own build goes up, whole.
+        assert_eq!(reports[1]["installed"], our_build());
+        // Nothing was installed: the hub's own build goes up, whole; then the new helper runs.
         let size = std::fs::metadata(agent()).unwrap().len();
-        let action = step(&trail, "boot.action");
+        let actions = all("boot.action");
+        let action = actions[0];
         assert_eq!(action["action"], "upload");
         assert_eq!(action["bytes"], size);
         assert_eq!(action["target"], our_target());
+        assert_eq!(actions[1]["action"], "run");
         let uploaded = step(&trail, "boot.uploaded");
         assert_eq!(uploaded["bytes"], size);
         assert!(uploaded["ms"].is_u64());
@@ -1515,7 +1528,9 @@ mod connect {
         std::fs::write(
             &fake,
             format!(
-                "#!/bin/sh\ncase \"$1\" in\n  --version) echo '{{\"build\":\"fake\",\"target\":\"fake\"}}';;\n  stop) exit 0;;\n  bridge) echo '{MARK}' >&2; exit 2;;\nesac\n"
+                "#!/bin/sh\ncase \"$1\" in\n  boot) echo 'MARSAD-BOOT2 os=Linux arch={arch} helper_build={build} daemon=absent install=ok'; read l; echo 'MARSAD-OK stop=none install=ok daemon=started'; echo '{MARK}' >&2; exit 2;;\nesac\n",
+                arch = std::env::consts::ARCH,
+                build = our_build()
             ),
         )
         .unwrap();
@@ -1551,6 +1566,8 @@ mod connect {
                 "boot.report",
                 "boot.action",
                 "boot.uploaded",
+                "boot.report",
+                "boot.action",
                 "boot.ok",
                 "boot.failed",
                 "link.attempt_end"
@@ -1647,14 +1664,17 @@ mod connect {
         let shape = pre["shape"].as_str().unwrap();
         assert!(shape.starts_with("Welcome to the test box"), "{shape}");
         assert!(shape.len() <= 130, "bounded: {shape}");
-        // The report came and the attempt went on as usual.
-        step(&trail, "boot.report");
+        // The reports came (the script's, then the installed helper's) and the attempt went on
+        // as usual.
+        assert_eq!(
+            evs(&trail).iter().filter(|e| **e == "boot.report").count(),
+            2
+        );
         step(&trail, "boot.hello");
     }
 
     /// The report never comes (the shell startup files print and end the session): the lines
-    /// and bytes that did arrive are in the records on every shell tried and in the reason the
-    /// user is shown.
+    /// and bytes that did arrive are in the records and in the reason the user is shown.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn when_no_report_comes_what_arrived_is_the_reason() {
         let d = TempDir::new();
@@ -1679,14 +1699,12 @@ mod connect {
         let hub = hub_records(c, &data).await;
 
         let trail = attempt(&hub, "mute", 1);
-        // POSIX first; a host that never connected is then tried as native Windows.
+        // One command line for every shell: nothing is tried again another way.
         assert_eq!(
             evs(&trail),
             [
                 "link.attempt_begin",
                 "boot.attempt",
-                "boot.preamble",
-                "boot.windows_retry",
                 "boot.preamble",
                 "boot.failed",
                 "link.attempt_end"
@@ -1699,7 +1717,6 @@ mod connect {
             );
             assert!(pre["shape"].as_str().unwrap().starts_with("junk-one"));
         }
-        assert_eq!(step(&trail, "boot.windows_retry")["why"], "no_report");
         let failed = step(&trail, "boot.failed");
         assert_eq!(failed["stage"], "report");
         assert_eq!(failed["kind"], "unexpected_output");
@@ -2181,12 +2198,13 @@ mod connect {
         c.add_host(draft("Box", "box", sshd.kind(&sshd.key)))
             .await
             .unwrap();
-        until(&mut fleet, "box connected", |e| {
-            link_is(e, "box", LinkState::is_connected)
-        })
-        .await;
-        until(&mut fleet, "the machine learned", |e| {
-            host_is(e, "box", |h| h.machine.is_some())
+        // Connected, and the registry taught the host's machine (from the report, before the
+        // link was up, or after: either order).
+        let (up, known) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
+        until(&mut fleet, "box connected and its machine learned", |e| {
+            up.set(up.get() || link_is(e, "box", LinkState::is_connected));
+            known.set(known.get() || host_is(e, "box", |h| h.machine.is_some()));
+            up.get() && known.get()
         })
         .await;
 

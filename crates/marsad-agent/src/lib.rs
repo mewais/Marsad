@@ -7,6 +7,8 @@
 //!   config and session launch) and routes host-service requests to remote daemons.
 //! * `bridge` pipes stdio to the local daemon (starting it if needed) — the remote end of a
 //!   hub link (`ssh <host> marsad-agent bridge`).
+//! * `boot` is the host's end of a hub's bootstrap ([`boot`], protocol in [`bootwire`]): it
+//!   reports, carries out the hub's decision, and then is the bridge.
 //! * `shim` is the per-session process holder (`wasit_shim::run`).
 //! * `stop` asks the local daemon to exit (sessions keep running in their shims).
 //! * `mcp` is the Wasl MCP server an agent CLI launches (`wasl_mcp::run`); the hub injects it
@@ -21,6 +23,8 @@
 #![forbid(unsafe_code)]
 
 pub mod askmcp;
+pub mod boot;
+pub mod bootwire;
 pub mod cli;
 pub mod diag;
 pub mod export_cli;

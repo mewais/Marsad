@@ -19,6 +19,12 @@ pub struct DaemonInfo {
     pub version: VersionInfo,
     pub host_id: String,
     pub hub: bool,
+    /// The hub this daemon serves (`--hub-id`, given by the bootstrap of the hub that started
+    /// it); `None` for a daemon started otherwise or by a build before hub ids. A daemon serves
+    /// one hub: another hub's bootstrap refuses to take it over while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub hub_id: Option<String>,
     pub data_dir: String,
     pub pid: u32,
     /// The daemon's own executable (also the `shim` and `mcp` entry).

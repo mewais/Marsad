@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use common::{isolated_home_env, master_pid, Sshd, TempDir};
+use common::{boot_target, isolated_home_env, master_pid, Sshd, TempDir};
 use marsad_agent::hub::master::{Check, Masters, SignInCommand, SignInStep};
-use marsad_agent::hub::transport::{bootstrap_argv_via, RemoteShell, SshRoute};
+use marsad_agent::hub::transport::{bootstrap_argv_via, SshRoute};
 use marsad_proto::diag::MasterExitWhy;
 use marsad_proto::hosts::{HostEntry, HostKind};
 use marsad_proto::HostId;
@@ -202,7 +202,7 @@ impl Rig {
     fn command(&self, env: &[(&str, &str)], extra: &[String]) -> SignInCommand {
         let mut argv = bootstrap_argv_via(
             &self.entry,
-            RemoteShell::Posix,
+            boot_target("box", "0123456789abcdef"),
             SshRoute::SignIn {
                 control: &self.control,
             },

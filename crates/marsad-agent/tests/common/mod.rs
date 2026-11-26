@@ -947,15 +947,35 @@ impl Drop for Frozen {
     }
 }
 
-/// Where the bootstrap installs the helper under the remote home (POSIX hosts).
+/// Where the bootstrap installs this build's helper under the remote home (POSIX hosts).
 #[allow(dead_code)]
 pub fn common_bin_rel() -> String {
+    format!(
+        ".marsad/bin/{}/{}/marsad-agent",
+        marsad_agent::hub::transport::build_dir(&marsad_agent::version::build_id()),
+        platform_dir()
+    )
+}
+
+/// What a bootstrap is for, as a test hub with id `hub` builds it for `host` (this build).
+#[allow(dead_code)]
+pub fn boot_target(host: &str, hub: &str) -> marsad_agent::hub::transport::BootTarget<'static> {
+    marsad_agent::hub::transport::BootTarget {
+        host_id: Box::leak(host.to_owned().into_boxed_str()),
+        hub_id: Box::leak(hub.to_owned().into_boxed_str()),
+        build: Box::leak(marsad_agent::version::build_id().into_boxed_str()),
+    }
+}
+
+/// The helper's platform directory name (`uname -s`-`uname -m`).
+#[allow(dead_code)]
+pub fn platform_dir() -> String {
     let os = if cfg!(target_os = "macos") {
         "Darwin"
     } else {
         "Linux"
     };
-    format!(".marsad/bin/{os}-{}/marsad-agent", std::env::consts::ARCH)
+    format!("{os}-{}", std::env::consts::ARCH)
 }
 
 /// The layout of `data` with its daemon's runtime directory ([`run_dir`]).

@@ -39,7 +39,7 @@ use crate::hub::export::{ExportEnv, Exports};
 use crate::hub::fleet::Fleet;
 use crate::hub::gitwatch::GitWatch;
 use crate::hub::hosts::{Registry, RegistryParts};
-use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
+use crate::hub::provision::{BootstrapConnector, BIN_DIR_ENV};
 use crate::hub::workstreams::Workstreams;
 use crate::hub::{AskUserMcp, HubServices, WaslMcp};
 use crate::version;
@@ -261,6 +261,7 @@ pub async fn serve(o: Options) -> ExitCode {
         version: version::info(),
         host_id: host_id.clone(),
         hub: o.hub,
+        hub_id: o.hub_id.clone(),
         data_dir: layout.data.display().to_string(),
         pid: std::process::id(),
         exe: exe.display().to_string(),
@@ -450,15 +451,19 @@ async fn start_hub(
     let (ltx, lrx) = tokio::sync::mpsc::channel(16);
     let prompt_timeout = o.auth_prompt_timeout.unwrap_or(Duration::from_secs(120));
     let prompts = Prompts::new(fleet.clone(), prompt_timeout);
-    let restarts = Arc::new(std::sync::Mutex::new(Default::default()));
     // The shared ssh connections of the hub's ssh hosts live in `<run>/ssh` and outlive this
-    // daemon (ssh owns them); this only finds them again.
+    // daemon (ssh owns them); this only finds them again. Those of hosts removed or edited
+    // while no hub ran are ended now, before any link starts.
     let masters = crate::hub::master::Masters::new(o.layout().ssh_dir());
+    if crate::hub::master::Masters::AVAILABLE {
+        let hosts = store.hosts().await.map_err(|e| e.to_string())?;
+        masters.sweep_orphans(&hosts).await;
+    }
     let connector = BootstrapConnector {
         entries: entries.clone(),
         learned: ltx,
         prompts: prompts.clone(),
-        restarts: restarts.clone(),
+        hub_id: hub_id(o),
         masters: masters.clone(),
         own: version::info(),
         bin_dir: std::env::var_os(BIN_DIR_ENV)
@@ -467,16 +472,16 @@ async fn start_hub(
         socket: o.socket_path(),
         diag_dir: o.layout().diag(),
     };
-    let provisioner = AgentProvisioner {
-        restarts,
-        prompts: prompts.clone(),
-        entries: entries.clone(),
-    };
     let mut hcfg =
         HubConfig::new(Hello::new(build, host_id, "hub").with_machine(o.layout().machine.clone()));
-    // One attempt includes the user answering sign-in prompts and an upload.
-    hcfg.supervise.connect_timeout = prompt_timeout * 3 + Duration::from_secs(120);
-    let hub = Hub::new(hcfg, Arc::new(connector), Some(Arc::new(provisioner)));
+    // No bound on an attempt as a whole (U3/G9): its steps are bounded by progress (each waits
+    // for the host's next line or the connection's end, which ssh's keep-alives detect), its
+    // prompts by the user's deadline. A slow login, helper start or upload only takes longer.
+    // (tokio maps a deadline past its range to "never".)
+    hcfg.supervise.connect_timeout = Duration::MAX;
+    // A daemon of another build is restarted inside the attempt (the bootstrap's decision):
+    // no provisioning round after the hello.
+    let hub = Hub::new(hcfg, Arc::new(connector), None);
     let routing: Arc<dyn Service> = Arc::new(RoutingService::new(hub.clone(), local));
     // A remote daemon's link may call only the Wasl routes it needs (see `remote_link_allows`):
     // the gate sits on the link slot only, so this host's own clients keep the full service.
@@ -598,6 +603,18 @@ async fn start_hub(
     Ok((top, hub))
 }
 
+/// This hub's id: the daemons it starts on its hosts serve it (`--hub-id`), and another hub
+/// does not take them over. Stable for one hub (its machine and data directory), different for
+/// two hubs on one machine.
+fn hub_id(o: &Options) -> String {
+    let data = std::path::absolute(&o.layout().data).unwrap_or_else(|_| o.layout().data.clone());
+    wasit_runtime::machine::key_from_raw(&format!(
+        "marsad-hub:{}:{}",
+        o.layout().machine,
+        data.display()
+    ))
+}
+
 /// An in-process supervised connection to the hub's routing service: the workstream actor
 /// talks to every host's node (local or remote) through it, with `host` on each request.
 fn loopback(routing: Arc<dyn Service>, build: &str, host_id: &str) -> Supervised {
@@ -659,7 +676,7 @@ const START_FAILED: u8 = 3;
 const START_ANOTHER: u8 = 4;
 
 /// What a successful start came to.
-enum Started {
+pub(crate) enum Started {
     /// The daemon printed its readiness line.
     Ready,
     /// It exited because another daemon holds this machine's lock (the connect that follows
@@ -786,11 +803,11 @@ pub async fn bridge(o: Options) -> ExitCode {
 
 /// Why starting a daemon failed: what is recorded, and the `io::Error` the bridge reports to
 /// the hub (its text is part of the goodbye frame and is unchanged).
-struct StartFailed {
+pub(crate) struct StartFailed {
     reason: StartFailure,
     exit: Option<i32>,
     error: Option<wasit_diag::ErrorInfo>,
-    cause: std::io::Error,
+    pub(crate) cause: std::io::Error,
 }
 
 impl StartFailed {
@@ -813,7 +830,10 @@ pub async fn start_detached(args: Vec<String>, layout: &Layout) -> std::io::Resu
         .map_err(|f| f.cause)
 }
 
-async fn start_daemon_process(args: Vec<String>, layout: &Layout) -> Result<Started, StartFailed> {
+pub(crate) async fn start_daemon_process(
+    args: Vec<String>,
+    layout: &Layout,
+) -> Result<Started, StartFailed> {
     use std::process::Stdio;
     use tokio::io::AsyncBufReadExt;
     let opener = layout.clone();
@@ -876,17 +896,30 @@ async fn start_daemon_process(args: Vec<String>, layout: &Layout) -> Result<Star
 }
 
 /// How `stop` ended, for the exit status and the record.
-struct Stopped {
+pub(crate) struct Stopped {
     code: ExitCode,
-    outcome: StopOutcome,
+    /// What happened, in words (`stop` prints them; the bootstrap reports them).
+    pub(crate) words: Vec<String>,
+    pub(crate) outcome: StopOutcome,
     legacy: bool,
     error: Option<wasit_diag::ErrorInfo>,
 }
 
 impl Stopped {
+    /// Whether no daemon runs any more (it stopped, or none was running).
+    pub(crate) fn done(&self) -> bool {
+        matches!(self.outcome, StopOutcome::Stopped | StopOutcome::NotRunning)
+    }
+
+    fn said(mut self, words: impl Into<String>) -> Self {
+        self.words.push(words.into());
+        self
+    }
+
     fn new(code: ExitCode, outcome: StopOutcome, legacy: bool) -> Self {
         Stopped {
             code,
+            words: Vec::new(),
             outcome,
             legacy,
             error: None,
@@ -898,6 +931,13 @@ impl Stopped {
 pub async fn stop(o: Options) -> ExitCode {
     let began = Instant::now();
     let done = stop_daemon(&o).await;
+    for w in &done.words {
+        if done.done() {
+            println!("{w}");
+        } else {
+            eprintln!("marsad-agent: {w}");
+        }
+    }
     emit(MarsadEvent::StopEnd {
         outcome: done.outcome,
         ms: diag::ms(began),
@@ -907,34 +947,42 @@ pub async fn stop(o: Options) -> ExitCode {
     done.code
 }
 
-async fn stop_daemon(o: &Options) -> Stopped {
+/// Asks the daemon of `o` to exit and waits until its lock is free; prints nothing on stdout
+/// (the bootstrap's stdout is its protocol), the outcome is in the result's words.
+pub(crate) async fn stop_daemon(o: &Options) -> Stopped {
     let mut legacy_stopped = false;
+    let mut earlier = None;
     if o.socket.is_none() {
         // A daemon of a build before the per-machine layout, on this machine.
         let legacy = wasit_control::local_endpoint(&o.layout().legacy_socket());
         if crate::migrate::stop_endpoint(&legacy).await {
-            println!("stopped a daemon of an earlier build");
+            earlier = Some("stopped a daemon of an earlier build");
             legacy_stopped = true;
         }
     }
+    let with_earlier = |s: Stopped| match earlier {
+        Some(w) => s.said(w),
+        None => s,
+    };
     let ep: Endpoint = o.endpoint();
     let opts = ClientOptions::new(Hello::new(version::build_id(), "marsad-agent-stop", "cli"));
     let client = match ControlClient::connect_endpoint(&ep, opts).await {
         Ok(c) => c,
         Err(wasit_control::ConnectError::Io(m)) => {
-            println!("no daemon running ({m})");
-            return Stopped::new(ExitCode::SUCCESS, StopOutcome::NotRunning, legacy_stopped);
+            return with_earlier(Stopped::new(
+                ExitCode::SUCCESS,
+                StopOutcome::NotRunning,
+                legacy_stopped,
+            ))
+            .said(format!("no daemon running ({m})"));
         }
         Err(e) => {
             // What a peer wrote in a refusal is not recorded: code, length, fingerprint.
             return Stopped {
                 error: Some(diag::foreign("connect", &e.to_string())),
-                ..Stopped::new(
-                    fail(format!("cannot reach the daemon: {e}"), 1),
-                    StopOutcome::Unreachable,
-                    legacy_stopped,
-                )
-            };
+                ..Stopped::new(ExitCode::from(1), StopOutcome::Unreachable, legacy_stopped)
+            }
+            .said(format!("cannot reach the daemon: {e}"));
         }
     };
     // The daemon may close the connection before answering; both mean it is going down.
@@ -943,19 +991,24 @@ async fn stop_daemon(o: &Options) -> Stopped {
         .await;
     // No deadline: a daemon slow to close or to exit is waited for, never given up on. The lock
     // is what says it has exited; it is released by the process's exit, whenever that comes.
-    // Progress goes to stderr so that stdout keeps its one line per outcome. Ctrl-C (or dropping
-    // this future) ends the wait; the daemon is not affected by it.
+    // Progress goes to stderr. Ctrl-C (or dropping this future) ends the wait; the daemon is not
+    // affected by it.
     eprintln!("waiting for the previous daemon to exit");
     client.closed().await;
     let lock = wasit_control::lock_path_for(&o.socket_path());
     if let Err(e) = crate::migrate::wait_free(&lock).await {
         return Stopped {
             error: Some(diag::ours("lock", &e)),
-            ..Stopped::new(fail(&e, 1), StopOutcome::LockError, legacy_stopped)
-        };
+            ..Stopped::new(ExitCode::from(1), StopOutcome::LockError, legacy_stopped)
+        }
+        .said(e.to_string());
     }
-    println!("stopped");
-    Stopped::new(ExitCode::SUCCESS, StopOutcome::Stopped, legacy_stopped)
+    with_earlier(Stopped::new(
+        ExitCode::SUCCESS,
+        StopOutcome::Stopped,
+        legacy_stopped,
+    ))
+    .said("stopped")
 }
 
 /// The `SSH_ASKPASS` helper: forward `prompt` to the hub (which shows it to the user) and

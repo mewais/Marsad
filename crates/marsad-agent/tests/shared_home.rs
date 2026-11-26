@@ -212,7 +212,8 @@ async fn two_machines_sharing_a_home_keep_their_own_daemons_and_sessions() {
     .unwrap();
     until(&mut fleet, "a2 refused as a twin", |e| {
         link_is(e, "a2", |s| {
-            matches!(s, LinkState::Reconnecting { last_error, .. } if last_error.contains("same machine as the host \"a\""))
+            // Parked with its reason: connecting again on a timer cannot change it.
+            matches!(s, LinkState::Failed { reason, .. } if reason.contains("same machine as the host \"a\""))
         })
     })
     .await;

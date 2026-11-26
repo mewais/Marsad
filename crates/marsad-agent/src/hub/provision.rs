@@ -5,45 +5,37 @@
 //! a sign-in step where every prompt happens ([`BootstrapConnector::shared_connection`]).
 //!
 //! [`BootstrapConnector`] (the hub's `LinkConnector`) runs `<transport> <bootstrap>` (see
-//! [`super::transport`]) with `SSH_ASKPASS` pointing at this binary, reads the bootstrap's
-//! report (OS, arch, installed build), uploads the matching binary through the same channel
-//! when the build differs, and then speaks the control protocol over it. A failed attempt is
-//! classified from ssh's exit status and stderr (wasit-control's classifier), so anything
-//! needing a human parks the link in `auth_needed`.
+//! [`super::transport`]: one command line for every default shell) with `SSH_ASKPASS` pointing
+//! at this binary and speaks the bootstrap's protocol ([`crate::bootwire`]) on that one
+//! connection: the host's report (platform, installed helper, its daemon: build, host id, hub),
+//! one decision ([`decide`]: run, restart, upload with SHA-256, or a refusal in words), the
+//! host's `MARSAD-OK` once its daemon is ready, then the control protocol. A restart, an id
+//! fix, an upgrade and Windows all happen on this connection: there is no second one, so a
+//! user who signs in does so once. A failed attempt is classified from ssh's exit status and
+//! stderr (wasit-control's classifier), so anything needing a human parks the link in
+//! `auth_needed`; a refusal (another hub's daemon, no checksum tool, a failed install) parks
+//! it as failed with its words.
 //!
 //! A host that needs the user at login (a connect asked them for something other than a
 //! host-key confirmation, see [`marsad_proto::hosts::PromptKind::needs_user`]) is never tried
 //! on the connector's own account: the link's supervisor asks [`BootstrapConnector::hold`]
 //! before every attempt it would start by itself, and a host that needs the user and has not
 //! been asked for (`hosts.reconnect` arms the next attempt) is parked in `auth_needed` instead,
-//! so a dropped link, a hub start or a retry never fires a prompt or a push on its own, unless
-//! the host's shared connection is still open: then nothing needs asking and the link
-//! reconnects by itself. The
-//! click is spent when an attempt asks the user something or connects, not when it starts: an
-//! attempt that fails before the host answered (no network) asked nobody anything, and the link
-//! goes on trying, armed. The fact is learned and un-learned here, once per successful sign-in
-//! (see [`Learned`]).
+//! unless the host's shared connection is still open. The click is spent when an attempt asks
+//! the user something or connects (see [`Learned`]).
 //!
-//! Every attempt records its steps (`boot.*`, see [`Trail`]) under the attempt number the
-//! supervisor passes in, and every failure says where it happened and why: the transport
-//! child's exit status and stderr tail for anything the remote side did (a refused install, a
-//! helper that cannot run), what the host printed instead of its report, and an attempt cut
-//! short by the supervisor leaves what it had seen, and tells the supervisor the step it had
-//! reached (its link state then says where the attempt was, not only that it timed out). A
-//! failed handshake after the bootstrap said OK is explained by wasit-control from the transport
-//! child (`ChildHandle::explain_handshake_failure`): a helper that ended by itself parks the
-//! link with its words (`CommandFailureKind::HelperFailed`) instead of being retried for ever.
-//!
-//! [`AgentProvisioner`] handles what only the hello reveals (a daemon of another build still
-//! running): it marks the host so the next attempt sends `RESTART`.
+//! Liveness is progress, not a clock (slow hosts must never fail): every step waits for the
+//! host's next line or its end (ssh's keep-alives end a dead connection), the upload reports its
+//! bytes, the host's daemon start waits for its readiness line; only sign-in prompts have a
+//! deadline, the user's. Every attempt records its steps (`boot.*`, see [`Trail`]).
 //!
 //! Binaries: the host's (os, arch) picks the shipped helper triple
 //! ([`super::transport::helper_target`]: any Linux → the static musl build); that is the
 //! running executable when it was built for that triple, else
-//! `MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]` (assumed to be the hub's build), else —
-//! development builds — the running executable when it runs on the same (os, arch).
-//! No build for the platform, or a missing file, fails the link (no retry loop) with a message
-//! saying what to do.
+//! `MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]` (assumed to be the hub's build: a helper
+//! that reports another is refused), else — development builds — the running executable when
+//! it runs on the same (os, arch). No build for the platform, or a missing file, fails the link
+//! (no retry loop) with a message saying what to do.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,10 +44,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use marsad_proto::daemon::VersionInfo;
-use marsad_proto::diag::{
-    BootShell, BootStage, HelperAction, HostsOp, MarsadEvent, MasterExitWhy, WindowsRetryWhy,
-};
-use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform, SignInRepeat};
+use marsad_proto::diag::{BootShell, BootStage, HelperAction, HostsOp, MarsadEvent, MasterExitWhy};
+use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform};
 use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -63,16 +53,17 @@ use wasit_control::wire::RpcError;
 use wasit_control::{
     classify_command_failure, Attempt, ClientOptions, CommandFailureKind, CommandSpec,
     CommandTransport, ConnectDiag, ConnectError, ControlClient, HostSpec, LinkConnector,
-    ProvisionError, ProvisionReason, Provisioner, CLOSED_EXIT_WAIT,
+    CLOSED_EXIT_WAIT,
 };
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
 use super::auth::{Asking, Prompts, SignInAttempt};
 use super::master::{Check, Masters, SignInCommand, SignInStep};
 use super::transport::{
-    bootstrap_argv_via, helper_target, native_windows_sign, platform_from, triple_platform,
-    RemoteShell, SshRoute,
+    bootstrap_argv_via, helper_target, platform_from, posix_script, triple_platform, BootTarget,
+    SshRoute,
 };
+use crate::bootwire::{self, DaemonState, Decision, Line, Report, RestartWhy};
 use crate::diag::{self, emit};
 
 /// Environment variable naming the directory with binaries for other target triples.
@@ -118,15 +109,13 @@ impl Learned {
     }
 }
 
-/// Hosts whose next attempt must restart the remote daemon, and why (the user is told when that
-/// asks them to sign in again).
-pub type Restarts = Arc<Mutex<HashMap<HostId, SignInRepeat>>>;
-
 pub struct BootstrapConnector {
     pub entries: Entries,
     pub learned: mpsc::Sender<Learned>,
     pub prompts: Prompts,
-    pub restarts: Restarts,
+    /// This hub's id: the daemon a bootstrap starts serves it, and a daemon serving another hub
+    /// is not taken over (see [`decide`]).
+    pub hub_id: String,
     /// The shared ssh connections of ssh hosts (a Windows hub has none, see [`Masters`]).
     pub masters: Masters,
     pub own: VersionInfo,
@@ -186,20 +175,6 @@ async fn read_raw_line<R: tokio::io::AsyncRead + Unpin>(
         if line.len() > MAX_LINE {
             return Ok(LineEnd::TooLong);
         }
-    }
-}
-
-/// Read one line of the bootstrap's answers (`None`: the stream ended).
-async fn read_line<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Option<String>> {
-    let line = Mutex::new(Vec::new());
-    match read_raw_line(r, &line).await? {
-        LineEnd::Newline => Ok(Some(
-            String::from_utf8_lossy(&locked(&line))
-                .trim_end_matches('\r')
-                .to_string(),
-        )),
-        LineEnd::Eof => Ok(None),
-        LineEnd::TooLong => Err(std::io::Error::other("bootstrap line too long")),
     }
 }
 
@@ -296,21 +271,35 @@ impl Missing {
 }
 
 enum BootRead {
-    /// The `MARSAD-BOOT …` line.
+    /// A protocol line (one of the tags asked for).
     Report(String),
     /// It did not come.
     Missing(Missing),
 }
 
-/// Read until the `MARSAD-BOOT …` line, keeping what came before it in `seen` as it arrives.
-async fn read_boot_line<R: tokio::io::AsyncRead + Unpin>(r: &mut R, seen: &Seen) -> BootRead {
+/// The tags a host's first protocol line may have.
+const FIRST_TAGS: &[&str] = &[bootwire::SH_READY, bootwire::REPORT, bootwire::FAIL];
+/// The tags of a report (after the POSIX script was sent, or after an upload).
+const REPORT_TAGS: &[&str] = &[bootwire::REPORT, bootwire::FAIL];
+/// The tags of the answer to a decision.
+const OK_TAGS: &[&str] = &[bootwire::OK, bootwire::FAIL];
+
+/// Read until a line tagged with one of `tags`, keeping what came before it in `seen` as it
+/// arrives. No time bound: a host whose login takes minutes (module loads in rc files) is still
+/// starting, and a dead connection ends the stream (ssh's keep-alives).
+async fn read_boot_line<R: tokio::io::AsyncRead + Unpin>(
+    r: &mut R,
+    seen: &Seen,
+    tags: &[&str],
+) -> BootRead {
     for _ in 0..MAX_PREAMBLE_LINES {
         let why = match read_raw_line(r, &seen.line).await {
             Ok(LineEnd::Newline) => {
                 let line = std::mem::take(&mut *locked(&seen.line));
                 let text = String::from_utf8_lossy(&line);
                 let text = text.trim_end_matches('\r');
-                if text.starts_with("MARSAD-BOOT ") {
+                let tag = text.split_whitespace().next().unwrap_or("");
+                if tags.contains(&tag) {
                     return BootRead::Report(text.to_owned());
                 }
                 locked(&seen.preamble).line(&line);
@@ -323,31 +312,6 @@ async fn read_boot_line<R: tokio::io::AsyncRead + Unpin>(r: &mut R, seen: &Seen)
         return BootRead::Missing(why);
     }
     BootRead::Missing(Missing::TooManyLines)
-}
-
-/// The bootstrap's report line, parsed.
-#[derive(Debug)]
-struct BootReport {
-    os: String,
-    arch: String,
-    installed: Option<VersionInfo>,
-}
-
-impl BootReport {
-    fn parse(line: &str) -> BootReport {
-        let mut parts = line.split_whitespace();
-        parts.next(); // MARSAD-BOOT
-        let os = parts.next().unwrap_or("").to_owned();
-        let arch = parts.next().unwrap_or("").to_owned();
-        let installed = parts
-            .next()
-            .and_then(|v| serde_json::from_str::<VersionInfo>(v).ok());
-        BootReport {
-            os,
-            arch,
-            installed,
-        }
-    }
 }
 
 /// How one attempt of the bootstrap is recorded (`boot.*`, design §5.3): every step carries the
@@ -410,7 +374,7 @@ impl Trail {
             BootStage::Platform => "checking the host's platform",
             BootStage::Helper => "locating the Marsad helper to install",
             BootStage::Upload => "sending the Marsad helper to the host",
-            BootStage::Ok => "waiting for the host to confirm the helper",
+            BootStage::Ok => "waiting for the host to carry out the decision (a restart waits for the old daemon to exit, a start for the daemon to be ready)",
             BootStage::Hello => "waiting for the helper's hello",
             BootStage::Check => "checking the host's identity",
         });
@@ -445,13 +409,13 @@ impl Trail {
         p
     }
 
-    fn attempt(&self, shell: RemoteShell, entry: &HostEntry, armed: bool) {
+    fn attempt(&self, entry: &HostEntry, armed: bool) {
         emit(MarsadEvent::BootAttempt {
             host: self.host.clone(),
             n: self.n(),
-            shell: match shell {
-                RemoteShell::Posix => BootShell::Posix,
-                RemoteShell::PowerShell => BootShell::Powershell,
+            shell: match entry.kind {
+                HostKind::Wsl { .. } => BootShell::Posix,
+                _ => BootShell::Universal,
             },
             first_contact: entry.platform.is_none(),
             interactive: entry.interactive_auth,
@@ -469,23 +433,21 @@ impl Trail {
         });
     }
 
-    fn report(&self, r: &BootReport) {
+    fn report(&self, r: &Report) {
         emit(MarsadEvent::BootReport {
             host: self.host.clone(),
             n: self.n(),
             os: Code::new(&r.os),
             arch: Code::new(&r.arch),
-            installed: r.installed.as_ref().map(|v| Ident::new(&v.build)),
+            installed: r.helper_build.as_deref().map(Ident::new),
             ms: self.since(),
         });
     }
 
-    fn windows_retry(&self, why: WindowsRetryWhy) {
-        emit(MarsadEvent::BootWindowsRetry {
-            host: self.host.clone(),
-            n: self.n(),
-            why,
-        });
+    /// Progress within a step, in words ("sending the Marsad helper (3 of 9 MB)"): what the
+    /// link state shows while the attempt runs.
+    fn tell(&self, words: String) {
+        self.attempt.reached(words);
     }
 
     fn action(&self, action: HelperAction, bytes: Option<u64>, target: &str) {
@@ -585,8 +547,14 @@ enum SendError {
     Remote(std::io::Error),
 }
 
-/// Copy `from` to `to` in chunks; `sent` counts what the host's end took.
-async fn send_file<R, W>(from: &mut R, to: &mut W, sent: &mut u64) -> Result<(), SendError>
+/// Copy `from` to `to` in chunks; `sent` counts what the host's end took, and `progress` is
+/// told after every chunk.
+async fn send_file<R, W>(
+    from: &mut R,
+    to: &mut W,
+    sent: &mut u64,
+    progress: impl Fn(u64),
+) -> Result<(), SendError>
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -599,6 +567,7 @@ where
         }
         to.write_all(&chunk[..n]).await.map_err(SendError::Remote)?;
         *sent += n as u64;
+        progress(*sent);
     }
 }
 
@@ -836,20 +805,6 @@ impl BootstrapConnector {
     }
 }
 
-/// The remote command ran (the connection and sign-in worked) but printed no bootstrap report.
-fn remote_command_ran(e: &ConnectError) -> bool {
-    matches!(
-        e,
-        ConnectError::Command {
-            kind: CommandFailureKind::Other
-                | CommandFailureKind::CommandNotFound
-                | CommandFailureKind::UnexpectedOutput
-                | CommandFailureKind::PermissionDenied,
-            ..
-        }
-    )
-}
-
 fn truncate(s: &str, max: usize) -> String {
     let t: String = s.chars().take(max).collect();
     if t.len() < s.len() {
@@ -958,8 +913,190 @@ impl LinkConnector for BootstrapConnector {
     }
 }
 
+/// What the hub does with a host's report: one decision, or a refusal in words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Choice {
+    Run,
+    Restart(RestartWhy),
+    Upload,
+    Refuse(String),
+}
+
+/// The decision for a report (pure; [`BootstrapConnector::run`] carries it out):
+///
+/// * no helper of this build: install it, if the host can check an upload's SHA-256 (else a
+///   refusal saying so), and only once per connection;
+/// * a helper that reports another build than the directory it was found in: a refusal (the
+///   installation's helper is not this hub's build);
+/// * a daemon that serves another hub: a refusal, for as long as it runs (G1: one account's
+///   daemon serves one hub; it is never taken over from a hub that uses it);
+/// * a daemon of another build, or one that knows itself by another host id (unless that id is
+///   a twin of this host, the same machine added twice: a refusal), or something that holds the
+///   daemon's endpoint and does not answer as one: restart it;
+/// * else run.
+pub fn decide(
+    r: &Report,
+    own_build: &str,
+    hub_id: &str,
+    host: &HostId,
+    twin: Option<&str>,
+    uploaded: bool,
+) -> Choice {
+    match r.helper_build.as_deref() {
+        None if uploaded => {
+            return Choice::Refuse(
+                "after the upload the host reported no Marsad helper installed".to_owned(),
+            )
+        }
+        None if r.hasher.is_none() => {
+            return Choice::Refuse(
+                "this host has no SHA-256 tool (sha256sum, shasum or openssl), so the Marsad helper cannot be checked after it is sent and is not installed: install one of them (coreutils, perl or openssl), then connect again"
+                    .to_owned(),
+            )
+        }
+        None => return Choice::Upload,
+        Some(b) if b != own_build => {
+            return Choice::Refuse(format!(
+                "the Marsad helper installed for this build reports build {b}, not {own_build}: this Marsad installation's helper for the host's platform is of another version. Reinstall Marsad, then connect again"
+            ))
+        }
+        Some(_) => {}
+    }
+    match r.daemon {
+        DaemonState::Running => {
+            if let Some(theirs) = r.daemon_hub.as_deref().filter(|h| *h != hub_id) {
+                let pid = r
+                    .daemon_pid
+                    .map_or_else(String::new, |p| format!(" (pid {p})"));
+                return Choice::Refuse(format!(
+                    "the Marsad daemon of this account on the host{pid} serves another Marsad hub ({theirs}); an account's daemon serves one hub, and it is not taken over while it runs. Stop it on the host (marsad-agent stop) or remove the host from the other hub, then connect again"
+                ));
+            }
+            if r.daemon_build.as_deref() != Some(own_build) {
+                return Choice::Restart(RestartWhy::Build);
+            }
+            if r.daemon_host.as_deref() != Some(host.as_str()) {
+                if let Some(name) = twin {
+                    return Choice::Refuse(format!(
+                        "this is the same machine as the host {name:?} (machine key {}); remove one of the two hosts",
+                        r.machine.as_deref().unwrap_or("?")
+                    ));
+                }
+                return Choice::Restart(RestartWhy::Host);
+            }
+            Choice::Run
+        }
+        DaemonState::Unreachable => Choice::Restart(RestartWhy::Unreachable),
+        DaemonState::Absent | DaemonState::Unknown => Choice::Run,
+    }
+}
+
+/// A refusal of the bootstrap or the hub: a configuration of the host or the installation,
+/// which retrying on a timer cannot change (the link parks until the user connects again).
+fn refused(words: impl Into<String>) -> ConnectError {
+    cmd_err(CommandFailureKind::HelperFailed, None, words)
+}
+
+/// `MARSAD-FAIL stage= reason=`, in words.
+fn host_failed(line: &Line) -> ConnectError {
+    refused(format!(
+        "the host's bootstrap failed ({}): {}",
+        line.get("stage").unwrap_or("?"),
+        line.get("reason").unwrap_or("no reason given")
+    ))
+}
+
 impl BootstrapConnector {
-    /// One connect attempt, step by step; `trail` records each step (see [`Trail`]).
+    /// The bootstrap of `host`, for this hub and build.
+    fn target<'a>(&'a self, host: &'a HostId) -> BootTarget<'a> {
+        BootTarget {
+            host_id: host.as_str(),
+            hub_id: &self.hub_id,
+            build: &self.own.build,
+        }
+    }
+
+    /// The host that is the same machine as `host` (by the machine key `machine`), by name.
+    fn twin(&self, host: &HostId, machine: Option<&str>) -> Option<(HostId, String)> {
+        let m = machine?;
+        self.entries
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .find(|e| e.id != *host && e.machine.as_deref() == Some(m))
+            .map(|e| (e.id.clone(), e.name.clone()))
+    }
+
+    /// The next protocol line tagged with one of `tags`; the stream ending (or anything else
+    /// that keeps the line from coming) is a failure at `stage`, explained by the transport
+    /// child (its exit status and stderr).
+    async fn next_line<R: tokio::io::AsyncRead + Unpin>(
+        &self,
+        io: &mut R,
+        trail: &Trail,
+        stage: BootStage,
+        tags: &[&str],
+        signin: &SignInAttempt,
+        child: &wasit_control::ChildHandle,
+    ) -> Result<Line, Failure> {
+        match read_boot_line(io, &trail.seen, tags).await {
+            BootRead::Report(text) => {
+                trail.seen.take();
+                let line = Line::parse(&text);
+                if line.tag == bootwire::FAIL {
+                    return Err(Failure {
+                        stage,
+                        error: host_failed(&line),
+                    });
+                }
+                Ok(line)
+            }
+            BootRead::Missing(why) => {
+                let p = trail.seen.take();
+                Err(Failure {
+                    stage,
+                    error: self
+                        .failed(
+                            signin,
+                            child,
+                            &format!(
+                                "the host sent {} {} (exit status follows)",
+                                p.describe(),
+                                why.describe()
+                            ),
+                        )
+                        .await,
+                })
+            }
+        }
+    }
+
+    /// Writes `bytes` to the host and flushes; the host's end gone is a failure at `stage`.
+    async fn send<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        io: &mut W,
+        bytes: &[u8],
+        stage: BootStage,
+        signin: &SignInAttempt,
+        child: &wasit_control::ChildHandle,
+    ) -> Result<(), Failure> {
+        let r = async {
+            io.write_all(bytes).await?;
+            io.flush().await
+        }
+        .await;
+        match r {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self
+                .remote_gone(stage, signin, child, "the host closed the connection", &e)
+                .await),
+        }
+    }
+
+    /// One connect attempt, step by step; `trail` records each step (see [`Trail`]). There is
+    /// no bound on the attempt as a whole: every step waits for the host's next line, or for its
+    /// end (ssh's keep-alives end a dead connection), and a slow host only takes longer, its
+    /// progress shown in the link state. The user-facing bound is the sign-in prompts'.
     async fn run(
         &self,
         spec: &HostSpec,
@@ -968,18 +1105,14 @@ impl BootstrapConnector {
     ) -> Result<ControlClient, Failure> {
         let entry = self.entry(&spec.id).map_err(at(BootStage::Prepare))?;
         let host = entry.id.clone();
-        let mut shell = RemoteShell::for_entry(&entry);
         // (The supervisor asked `hold` before it started this attempt: a host that needs the
         // user is only here because the user asked, or because this follows their sign-in.)
-        trail.attempt(shell, &entry, self.prompts.armed(&host));
+        trail.attempt(&entry, self.prompts.armed(&host));
         let exe = std::env::current_exe()
             .map_err(|e| ConnectError::Spawn(e.to_string()))
             .map_err(at(BootStage::Prepare))?;
-        // This attempt's prompts are its own: they end with it, whichever way it ends. A restart
-        // the previous attempt asked for makes this a second sign-in of one Connect: its prompts
-        // say so.
-        let repeat = locked(&self.restarts).get(&host).copied();
-        let signin = self.prompts.begin_attempt(&host, repeat);
+        // This attempt's prompts are its own: they end with it, whichever way it ends.
+        let signin = self.prompts.begin_attempt(&host, None);
         learn_when_asked(self.learned.clone(), host.clone(), signin.asking());
         // An ssh host on a Linux or macOS hub has one shared connection: opened here, once,
         // with every prompt of the attempt (the sign-in step); every command after it rides it
@@ -992,239 +1125,167 @@ impl BootstrapConnector {
         } else {
             None
         };
-        // A host never connected is tried with `sh`. One that turns out to be native Windows
-        // is asked again at once with PowerShell (its platform is then learned): its `sh` is a
-        // Windows port that reports MINGW/MSYS/CYGWIN, or the remote command ran but printed no
-        // report (cmd.exe has no `sh` and mangles the POSIX line; its messages are localised,
-        // so any such failure gets one PowerShell attempt, and a host where that fails too
-        // keeps the POSIX attempt's error).
-        let mut posix_failed: Option<ConnectError> = None;
-        let (mut io, child, report) = loop {
-            let route = match &control {
-                Some(c) => SshRoute::Link { control: &c.0 },
-                None => SshRoute::Plain,
-            };
-            let argv = bootstrap_argv_via(&entry, shell, route)
-                .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
-                .map_err(at(BootStage::Prepare))?;
-            // The transport's spawn and exit are recorded under this link and attempt.
-            let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
-            cmd.env = self.askpass_env(&exe, &host, &signin);
-            let (mut io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
-            let child = Arc::new(child);
-            // Only a host that never connected (once connected, its platform is known).
-            let first_posix = shell == RemoteShell::Posix
-                && entry.platform.is_none()
-                && matches!(entry.kind, HostKind::Ssh { .. });
-            trail.expect_report();
-            match read_boot_line(&mut io, &trail.seen).await {
-                BootRead::Report(line) => {
-                    trail.record_preamble();
-                    let report = BootReport::parse(&line);
-                    trail.report(&report);
-                    if first_posix && native_windows_sign(&report.os) {
-                        trail.windows_retry(WindowsRetryWhy::MingwSh);
-                        shell = RemoteShell::PowerShell;
-                        // Another connection: the user may be asked again, and is told why
-                        // (not over a shared connection: it is the same one).
-                        if control.is_none() {
-                            signin.again(SignInRepeat::WindowsShell);
-                        }
-                        continue;
-                    }
-                    break (io, child, report);
-                }
-                BootRead::Missing(why) => {
-                    let preamble = trail.record_preamble();
-                    let err = self
-                        .no_bootstrap(
-                            &entry,
-                            &signin,
-                            &child,
-                            preamble.text().trim(),
-                            &preamble,
-                            why,
-                        )
-                        .await;
-                    // A link step that was refused without being asked anything found no
-                    // connection to ride: say so (the host needs the user to open one again).
-                    let err = match (&control, err) {
-                        (
-                            Some((path, _)),
-                            ConnectError::Command {
-                                kind: CommandFailureKind::AuthNeeded,
-                                exit_code,
-                                stderr,
-                            },
-                        ) => {
-                            // The connection is looked at again: if it ended, why is told.
-                            self.masters.check(&entry, path, Some(trail.n())).await;
-                            let ended = self.masters.ended_words(&host).unwrap_or_else(|| {
-                                "the shared connection to this host ended before this attempt could use it"
-                                    .to_owned()
-                            });
-                            cmd_err(
-                                CommandFailureKind::AuthNeeded,
-                                exit_code,
-                                format!("{ended}; ssh said: {stderr}"),
-                            )
-                        }
-                        (_, err) => err,
-                    };
-                    if first_posix && remote_command_ran(&err) {
-                        trail.windows_retry(WindowsRetryWhy::NoReport);
-                        posix_failed = Some(err);
-                        shell = RemoteShell::PowerShell;
-                        if control.is_none() {
-                            signin.again(SignInRepeat::WindowsShell);
-                        }
-                        continue;
-                    }
-                    return Err(Failure {
-                        stage: BootStage::Report,
-                        error: match posix_failed {
-                            Some(ConnectError::Command {
-                                kind,
-                                exit_code,
-                                stderr,
-                            }) => cmd_err(
-                                kind,
-                                exit_code,
-                                format!("{stderr} (tried as a Windows host too: {err})"),
-                            ),
-                            _ => err,
-                        },
-                    });
-                }
+        let route = match &control {
+            Some(c) => SshRoute::Link { control: &c.0 },
+            None => SshRoute::Plain,
+        };
+        let argv = bootstrap_argv_via(&entry, self.target(&host), route)
+            .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
+            .map_err(at(BootStage::Prepare))?;
+        // The transport's spawn and exit are recorded under this link and attempt.
+        let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
+        cmd.env = self.askpass_env(&exe, &host, &signin);
+        let (mut io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
+        let child = Arc::new(child);
+        trail.expect_report();
+        let mut line = match read_boot_line(&mut io, &trail.seen, FIRST_TAGS).await {
+            BootRead::Report(text) => {
+                trail.record_preamble();
+                Line::parse(&text)
+            }
+            BootRead::Missing(why) => {
+                let preamble = trail.record_preamble();
+                let err = self
+                    .no_bootstrap(
+                        &entry,
+                        &signin,
+                        &child,
+                        preamble.text().trim(),
+                        &preamble,
+                        why,
+                    )
+                    .await;
+                return Err(Failure {
+                    stage: BootStage::Report,
+                    error: self.unridden(&entry, &control, trail, err).await,
+                });
             }
         };
+        // A POSIX host's `sh` asks for its script: one line, then its report.
+        if line.tag == bootwire::SH_READY {
+            let script = format!("{}\n", posix_script(self.target(&host)));
+            self.send(
+                &mut io,
+                script.as_bytes(),
+                BootStage::Report,
+                &signin,
+                &child,
+            )
+            .await?;
+            line = self
+                .next_line(
+                    &mut io,
+                    trail,
+                    BootStage::Report,
+                    REPORT_TAGS,
+                    &signin,
+                    &child,
+                )
+                .await?;
+        } else if line.tag == bootwire::FAIL {
+            return Err(Failure {
+                stage: BootStage::Report,
+                error: host_failed(&line),
+            });
+        }
         // The host answered and the sign-in worked. Whether it needs the user at login is a
         // fact of this sign-in: what it asked, nothing more (a host-key confirmation is not the
-        // user's at login). Learned when it is true, un-learned when it stopped being true. With
-        // a shared connection the sign-in was the step that opened it, and was learned from
-        // there; an attempt that only rode a connection learns nothing (nobody was asked, and
-        // that says nothing about the next sign-in).
+        // user's at login). With a shared connection the sign-in was the step that opened it,
+        // and was learned from there.
         if control.is_none() {
             self.learn_login(&entry, &signin).await;
         }
-        trail.reach(BootStage::Platform);
-        let platform = platform_from(&report.os, &report.arch).ok_or_else(|| Failure {
-            stage: BootStage::Platform,
-            error: cmd_err(
-                CommandFailureKind::UnsupportedPlatform,
-                None,
-                format!("Marsad has no helper for {} on {} (it ships helpers for Linux, macOS and Windows on x86_64 and ARM64). This host cannot run Marsad sessions; remove it.", report.os, report.arch),
-            ),
-        })?;
-        if entry.platform.as_ref() != Some(&platform) {
-            self.learn(Learned::Platform {
-                host: host.clone(),
-                platform: platform.clone(),
-            })
-            .await;
-        }
-        let restart = locked(&self.restarts).remove(&host).is_some();
-        let up_to_date = report
-            .installed
-            .as_ref()
-            .is_some_and(|v| v.build == self.own.build);
-        // What went to the host (an install's size and how long it took).
-        let mut uploaded: Option<(u64, Duration)> = None;
-        if up_to_date {
-            let (action, line): (_, &[u8]) = if restart {
-                (HelperAction::Restart, b"RESTART\n")
-            } else {
-                (HelperAction::Run, b"RUN\n")
-            };
-            trail.reach(BootStage::Ok);
-            trail.action(action, None, &platform.target);
-            if let Err(e) = io.write_all(line).await {
-                return Err(self
-                    .remote_gone(
-                        BootStage::Ok,
-                        &signin,
-                        &child,
-                        "the host closed the connection",
-                        &e,
-                    )
-                    .await);
+        let mut uploaded = false;
+        let decision = loop {
+            let report = Report::parse(&line);
+            trail.report(&report);
+            trail.reach(BootStage::Platform);
+            // Learned from every report (B14: a reinstalled host is never stuck as what it was).
+            let platform = platform_from(&report.os, &report.arch).ok_or_else(|| Failure {
+                stage: BootStage::Platform,
+                error: cmd_err(
+                    CommandFailureKind::UnsupportedPlatform,
+                    None,
+                    format!("Marsad has no helper for {} on {} (it ships helpers for Linux, macOS and Windows on x86_64 and ARM64). This host cannot run Marsad sessions; remove it.", report.os, report.arch),
+                ),
+            })?;
+            if entry.platform.as_ref() != Some(&platform) {
+                self.learn(Learned::Platform {
+                    host: host.clone(),
+                    platform: platform.clone(),
+                })
+                .await;
             }
-        } else {
-            trail.reach(BootStage::Helper);
-            let file = self.artifact(&platform).map_err(at(BootStage::Helper))?;
-            let local = |e: std::io::Error| Failure {
-                stage: BootStage::Helper,
-                error: ConnectError::Io(format!("{}: {e}", file.display())),
-            };
-            let mut f = tokio::fs::File::open(&file).await.map_err(local)?;
-            let len = f.metadata().await.map_err(local)?.len();
-            trail.reach(BootStage::Upload);
-            trail.action(HelperAction::Upload, Some(len), &platform.target);
-            let began = Instant::now();
-            let mut sent = 0u64;
-            let upload = async {
-                io.write_all(format!("UPLOAD {len}\n").as_bytes())
-                    .await
-                    .map_err(SendError::Remote)?;
-                send_file(&mut f, &mut io, &mut sent).await
+            let twin = self.twin(&host, report.machine.as_deref());
+            if let Some((twin_id, _)) = &twin {
+                emit(MarsadEvent::BootTwin {
+                    host: trail.host.clone(),
+                    n: trail.n(),
+                    twin: Ident::new(twin_id.as_str()),
+                });
             }
-            .await;
-            match upload {
-                Ok(()) => uploaded = Some((len, began.elapsed())),
-                Err(SendError::Local(e)) => return Err(local(e)),
-                // The remote stopped reading: its exit status and stderr are the reason (a full
-                // disk, a quota, a directory it may not write), not our broken pipe.
-                Err(SendError::Remote(e)) => {
-                    return Err(self
-                        .remote_gone(
+            let choice = decide(
+                &report,
+                &self.own.build,
+                &self.hub_id,
+                &host,
+                twin.as_ref().map(|t| t.1.as_str()),
+                uploaded,
+            );
+            match choice {
+                Choice::Refuse(words) => {
+                    return Err(Failure {
+                        stage: BootStage::Check,
+                        error: refused(words),
+                    })
+                }
+                Choice::Run | Choice::Restart(_) => {
+                    if let Some(m) = &report.machine {
+                        self.learn(Learned::Machine {
+                            host: host.clone(),
+                            machine: m.clone(),
+                        })
+                        .await;
+                    }
+                    let (d, action) = match choice {
+                        Choice::Restart(why) => (Decision::Restart(why), HelperAction::Restart),
+                        _ => (Decision::Run, HelperAction::Run),
+                    };
+                    trail.reach(BootStage::Ok);
+                    trail.action(action, None, &platform.target);
+                    let text = format!("{}\n", d.line());
+                    self.send(&mut io, text.as_bytes(), BootStage::Ok, &signin, &child)
+                        .await?;
+                    break d;
+                }
+                Choice::Upload => {
+                    self.upload(&mut io, trail, &platform, &signin, &child)
+                        .await?;
+                    uploaded = true;
+                    // The new helper reports (`install=ok`) and gets the decision.
+                    line = self
+                        .next_line(
+                            &mut io,
+                            trail,
                             BootStage::Upload,
+                            REPORT_TAGS,
                             &signin,
                             &child,
-                            &format!(
-                                "the host stopped reading while the Marsad helper was being sent ({sent} of {len} bytes)"
-                            ),
-                            &e,
                         )
-                        .await);
+                        .await?;
                 }
             }
-        }
-        if let Err(e) = io.flush().await {
-            let stage = if uploaded.is_some() {
-                BootStage::Upload
-            } else {
-                BootStage::Ok
-            };
-            return Err(self
-                .remote_gone(stage, &signin, &child, "the host closed the connection", &e)
-                .await);
-        }
-        if let Some((len, took)) = uploaded {
-            trail.uploaded(len, took);
-        }
-        trail.reach(BootStage::Ok);
-        match read_line(&mut io).await {
-            Ok(Some(l)) if l == "MARSAD-OK" => {}
-            Ok(Some(l)) => {
-                return Err(Failure {
-                    stage: BootStage::Ok,
-                    error: ConnectError::Protocol(format!(
-                        "unexpected bootstrap answer {:?}",
-                        truncate(&l, 200)
-                    )),
-                })
-            }
-            // The remote stopped before it answered (its install failed, or the connection
-            // ended): what it said is the reason.
-            Ok(None) | Err(_) => {
-                return Err(Failure {
-                    stage: BootStage::Ok,
-                    error: self
-                        .failed(&signin, &child, "installing marsad-agent failed")
-                        .await,
-                })
-            }
-        }
+        };
+        let ok = self
+            .next_line(&mut io, trail, BootStage::Ok, OK_TAGS, &signin, &child)
+            .await?;
+        trail.tell(format!(
+            "the host carried out {} (stop: {}, install: {}, daemon: {})",
+            decision.line(),
+            ok.get("stop").unwrap_or("none"),
+            ok.get("install").unwrap_or("none"),
+            ok.get("daemon").unwrap_or("?")
+        ));
         trail.ok();
         trail.reach(BootStage::Hello);
         let client = match ControlClient::connect(io, opts).await {
@@ -1241,59 +1302,19 @@ impl BootstrapConnector {
         let hello = client.connection().remote_hello().clone();
         trail.hello(&hello, &host);
         trail.reach(BootStage::Check);
-        if let Some(m) = &hello.machine {
-            let twin = self
-                .entries
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .values()
-                .find(|e| e.id != host && e.machine.as_deref() == Some(m.as_str()))
-                .map(|e| (e.id.clone(), e.name.clone()));
-            if let Some((twin_id, twin_name)) = twin {
-                emit(MarsadEvent::BootTwin {
-                    host: trail.host.clone(),
-                    n: trail.n(),
-                    twin: Ident::new(twin_id.as_str()),
-                });
-                if hello.host_id != host {
-                    // Restarting it under this id would take it away from the other host,
-                    // which would then restart it back.
-                    return Err(Failure {
-                        stage: BootStage::Check,
-                        error: ConnectError::Protocol(format!(
-                            "this is the same machine as the host {twin_name:?} (machine key {m}); \
-                             remove one of the two hosts"
-                        )),
-                    });
-                }
-            }
-            self.learn(Learned::Machine {
-                host: host.clone(),
-                machine: m.clone(),
-            })
-            .await;
-        }
-        let theirs = hello.host_id;
-        // (Another build is restarted through the provisioner, which also fixes the id.)
-        if theirs != host && hello.build == self.own.build {
-            // A daemon started earlier under another id (e.g. by hand): the next attempt
-            // restarts it as this host.
+        if hello.host_id != host {
+            // The decision above made the daemon this host's; anything else is not ours to fix
+            // by connecting again.
             emit(MarsadEvent::BootIdMismatch {
                 host: trail.host.clone(),
                 n: trail.n(),
-                theirs: Ident::new(theirs.as_str()),
+                theirs: Ident::new(hello.host_id.as_str()),
             });
-            locked(&self.restarts).insert(host.clone(), SignInRepeat::IdRestart);
-            // The user's sign-in is not over: the restart attempt is part of it. (A shared
-            // connection carries the restart attempt without asking anything: nothing is armed,
-            // so that one that has ended meanwhile cannot make this attempt ask unrequested.)
-            if control.is_none() {
-                self.prompts.arm(&host);
-            }
             return Err(Failure {
                 stage: BootStage::Check,
-                error: ConnectError::Protocol(format!(
-                    "the daemon on this host runs as {theirs:?}, not {host:?}; restarting it"
+                error: refused(format!(
+                    "the daemon on this host runs as {:?}, not {host:?}, after the bootstrap made it this host's",
+                    hello.host_id
                 )),
             });
         }
@@ -1302,6 +1323,108 @@ impl BootstrapConnector {
         Ok(client
             .with_attachment(child.clone())
             .with_diagnostics(child))
+    }
+
+    /// A link step that was refused without being asked anything found no connection to ride:
+    /// say so (the host needs the user to open one again).
+    async fn unridden(
+        &self,
+        entry: &HostEntry,
+        control: &Option<(PathBuf, bool)>,
+        trail: &Trail,
+        err: ConnectError,
+    ) -> ConnectError {
+        match (control, err) {
+            (
+                Some((path, _)),
+                ConnectError::Command {
+                    kind: CommandFailureKind::AuthNeeded,
+                    exit_code,
+                    stderr,
+                },
+            ) => {
+                // The connection is looked at again: if it ended, why is told.
+                self.masters.check(entry, path, Some(trail.n())).await;
+                let ended = self.masters.ended_words(&entry.id).unwrap_or_else(|| {
+                    "the shared connection to this host ended before this attempt could use it"
+                        .to_owned()
+                });
+                cmd_err(
+                    CommandFailureKind::AuthNeeded,
+                    exit_code,
+                    format!("{ended}; ssh said: {stderr}"),
+                )
+            }
+            (_, err) => err,
+        }
+    }
+
+    /// Sends the helper for `platform`: `UPLOAD <n> <sha256>` and its bytes, the hash taken
+    /// first from the file that is sent (a file replaced meanwhile fails the host's check, and
+    /// nothing is installed). Bounded by progress only: the link state shows the bytes the host
+    /// has taken so far.
+    async fn upload<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        io: &mut W,
+        trail: &Trail,
+        platform: &HostPlatform,
+        signin: &SignInAttempt,
+        child: &wasit_control::ChildHandle,
+    ) -> Result<(), Failure> {
+        trail.reach(BootStage::Helper);
+        let file = self.artifact(platform).map_err(at(BootStage::Helper))?;
+        let local = |e: std::io::Error| Failure {
+            stage: BootStage::Helper,
+            error: ConnectError::Io(format!("{}: {e}", file.display())),
+        };
+        let hashing = file.clone();
+        let sha256 = tokio::task::spawn_blocking(move || bootwire::sha256_file(&hashing))
+            .await
+            .map_err(|e| local(std::io::Error::other(e)))?
+            .map_err(local)?;
+        let f = tokio::fs::File::open(&file).await.map_err(local)?;
+        let len = f.metadata().await.map_err(local)?.len();
+        trail.reach(BootStage::Upload);
+        trail.action(HelperAction::Upload, Some(len), &platform.target);
+        let began = Instant::now();
+        let header = format!("{}\n", Decision::Upload { bytes: len, sha256 }.line());
+        self.send(io, header.as_bytes(), BootStage::Upload, signin, child)
+            .await?;
+        let mut sent = 0u64;
+        let mut from = f.take(len);
+        let r = send_file(&mut from, io, &mut sent, |sent| {
+            trail.tell(format!(
+                "sending the Marsad helper to the host ({sent} of {len} bytes)"
+            ))
+        })
+        .await;
+        let r = match r {
+            Ok(()) if sent < len => Err(SendError::Local(std::io::Error::other(format!(
+                "the file shrank while it was sent ({sent} of {len} bytes)"
+            )))),
+            Ok(()) => io.flush().await.map_err(SendError::Remote),
+            Err(e) => Err(e),
+        };
+        match r {
+            Ok(()) => {
+                trail.uploaded(len, began.elapsed());
+                Ok(())
+            }
+            Err(SendError::Local(e)) => Err(local(e)),
+            // The remote stopped reading: its exit status and stderr are the reason (a full
+            // disk, a quota, a directory it may not write), not our broken pipe.
+            Err(SendError::Remote(e)) => Err(self
+                .remote_gone(
+                    BootStage::Upload,
+                    signin,
+                    child,
+                    &format!(
+                        "the host stopped reading while the Marsad helper was being sent ({sent} of {len} bytes)"
+                    ),
+                    &e,
+                )
+                .await),
+        }
     }
 }
 
@@ -1431,7 +1554,7 @@ impl BootstrapConnector {
         let began = Instant::now();
         let argv = bootstrap_argv_via(
             entry,
-            RemoteShell::Posix,
+            self.target(host),
             SshRoute::SignIn { control: &control },
         )
         .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
@@ -1522,44 +1645,6 @@ impl BootstrapConnector {
     }
 }
 
-/// Handles a running daemon of another build (seen in its hello): the next attempt restarts it.
-pub struct AgentProvisioner {
-    pub restarts: Restarts,
-    pub prompts: Prompts,
-    pub entries: Entries,
-}
-
-#[async_trait]
-impl Provisioner for AgentProvisioner {
-    async fn ensure(
-        &self,
-        host: &HostSpec,
-        problem: ProvisionReason,
-    ) -> Result<(), ProvisionError> {
-        if let ProvisionReason::BuildMismatch { expected, found } = &problem {
-            emit(MarsadEvent::BootBuildMismatch {
-                host: Ident::new(host.id.as_str()),
-                expected: Ident::new(expected),
-                found: Ident::new(found),
-            });
-        }
-        locked(&self.restarts).insert(host.id.clone(), SignInRepeat::HelperRestart);
-        // The user just signed in for this link; the restart attempt is part of that. Over a
-        // shared connection it rides that connection and asks nothing, so nothing is armed
-        // (a connection that has ended meanwhile must not make it ask unrequested).
-        let shared = self
-            .entries
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&host.id)
-            .is_some_and(Masters::applies);
-        if !shared {
-            self.prompts.arm(&host.id);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1617,23 +1702,26 @@ mod tests {
     async fn from_host(input: &[u8]) -> (BootRead, Preamble) {
         let seen = Seen::default();
         let mut r = input;
-        let read = read_boot_line(&mut r, &seen).await;
+        let read = read_boot_line(&mut r, &seen, FIRST_TAGS).await;
         (read, seen.take())
     }
 
     #[tokio::test]
     async fn bootstrap_report_after_a_banner_and_foreign_output() {
         let seen = Seen::default();
-        let mut ok: &[u8] = b"Welcome!\nlast login: never\nMARSAD-BOOT Linux x86_64 none\nrest";
-        let BootRead::Report(line) = read_boot_line(&mut ok, &seen).await else {
+        let mut ok: &[u8] = b"Welcome!\nlast login: never\nMARSAD-BOOTX no\nMARSAD-SH\nrest";
+        let BootRead::Report(line) = read_boot_line(&mut ok, &seen, FIRST_TAGS).await else {
             panic!("the report was there");
         };
-        assert_eq!(line, "MARSAD-BOOT Linux x86_64 none");
+        assert_eq!(line, "MARSAD-SH");
         // The banner is counted, line by line and byte by byte, and nothing past the report
         // was read.
         let preamble = seen.take();
-        assert_eq!((preamble.lines, preamble.bytes), (2, 27));
-        assert_eq!(preamble.text(), "Welcome!\nlast login: never\n");
+        assert_eq!((preamble.lines, preamble.bytes), (3, 27 + 16));
+        assert_eq!(
+            preamble.text(),
+            "Welcome!\nlast login: never\nMARSAD-BOOTX no\n"
+        );
         assert_eq!(ok, b"rest");
         // The owner's report: wsl.exe's UTF-16LE error instead of the bootstrap.
         let utf16: Vec<u8> = "There is no distribution with the supplied name.\r\n"
@@ -1700,7 +1788,7 @@ mod tests {
                 .write_all(b"Welcome\nsecond line\npartial banner")
                 .await
                 .unwrap();
-            let mut wait = Box::pin(read_boot_line(&mut hub_end, &trail.seen));
+            let mut wait = Box::pin(read_boot_line(&mut hub_end, &trail.seen, FIRST_TAGS));
             // One poll takes what is there and then waits for more: the host is silent.
             let polled =
                 std::future::poll_fn(|cx| std::task::Poll::Ready(wait.as_mut().poll(cx))).await;
@@ -1730,16 +1818,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn report(helper: Option<&str>, daemon: DaemonState) -> Report {
+        Report {
+            os: "Linux".into(),
+            arch: "x86_64".into(),
+            helper_build: helper.map(Into::into),
+            helper_hash: None,
+            hasher: Some("sha256sum".into()),
+            daemon,
+            daemon_build: Some("own".into()),
+            daemon_host: Some("box".into()),
+            daemon_pid: Some(7),
+            daemon_hub: Some("hub1".into()),
+            machine: Some("m".into()),
+            installed: false,
+        }
+    }
+
     #[test]
-    fn the_report_line_is_parsed_into_words() {
-        let r = BootReport::parse(
-            r#"MARSAD-BOOT Linux x86_64 {"build":"0.2.0+abc","target":"x86_64-unknown-linux-musl"}"#,
+    fn one_decision_per_report() {
+        let host = HostId::new("box");
+        let d = |r: &Report, twin: Option<&str>, uploaded: bool| {
+            decide(r, "own", "hub1", &host, twin, uploaded)
+        };
+        // Nothing installed: upload, once, and only with a checksum tool.
+        let none = report(None, DaemonState::Unknown);
+        assert_eq!(d(&none, None, false), Choice::Upload);
+        assert!(matches!(d(&none, None, true), Choice::Refuse(_)));
+        let no_tool = Report {
+            hasher: None,
+            ..none.clone()
+        };
+        let Choice::Refuse(w) = d(&no_tool, None, false) else {
+            panic!("no checksum tool: refused")
+        };
+        assert!(w.contains("sha256sum, shasum or openssl"), "{w}");
+        // A helper of another build where ours belongs.
+        assert!(matches!(
+            d(&report(Some("other"), DaemonState::Absent), None, true),
+            Choice::Refuse(_)
+        ));
+        // Our helper: run, whatever runs or not.
+        for st in [DaemonState::Absent, DaemonState::Running] {
+            assert_eq!(d(&report(Some("own"), st), None, false), Choice::Run);
+        }
+        let installed = Report {
+            installed: true,
+            ..report(Some("own"), DaemonState::Absent)
+        };
+        assert_eq!(d(&installed, None, true), Choice::Run);
+        // A daemon of another build, of another id, or one that does not answer: restart.
+        let mut r = report(Some("own"), DaemonState::Running);
+        r.daemon_build = Some("old".into());
+        assert_eq!(d(&r, None, false), Choice::Restart(RestartWhy::Build));
+        // An earlier build's daemon does not say which hub it serves: it is taken over.
+        r.daemon_hub = None;
+        assert_eq!(d(&r, None, false), Choice::Restart(RestartWhy::Build));
+        let mut r = report(Some("own"), DaemonState::Running);
+        r.daemon_host = Some("elsewhere".into());
+        assert_eq!(d(&r, None, false), Choice::Restart(RestartWhy::Host));
+        // ... unless that id is a twin: the same machine added twice.
+        assert!(matches!(d(&r, Some("Twin"), false), Choice::Refuse(w) if w.contains("\"Twin\"")));
+        assert_eq!(
+            d(&report(Some("own"), DaemonState::Unreachable), None, false),
+            Choice::Restart(RestartWhy::Unreachable)
         );
-        assert_eq!((r.os.as_str(), r.arch.as_str()), ("Linux", "x86_64"));
-        assert_eq!(r.installed.unwrap().build, "0.2.0+abc");
-        let none = BootReport::parse("MARSAD-BOOT Darwin arm64 none");
-        assert!(none.installed.is_none());
-        assert_eq!(none.arch, "arm64");
+        // Another hub's daemon is never taken over, whatever its build.
+        let mut r = report(Some("own"), DaemonState::Running);
+        r.daemon_hub = Some("hub2".into());
+        r.daemon_build = Some("old".into());
+        let Choice::Refuse(w) = d(&r, None, false) else {
+            panic!("another hub's daemon: refused")
+        };
+        assert!(
+            w.contains("another Marsad hub (hub2)") && w.contains("pid 7"),
+            "{w}"
+        );
     }
 
     /// A host the user signed out of, with no connection open and no attempt in flight, is refused
@@ -1776,7 +1930,7 @@ mod tests {
             entries,
             learned,
             prompts: prompts.clone(),
-            restarts: Restarts::default(),
+            hub_id: "0123456789abcdef".into(),
             masters: masters.clone(),
             own: VersionInfo {
                 build: "test".into(),

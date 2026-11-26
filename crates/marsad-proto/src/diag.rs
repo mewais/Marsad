@@ -150,22 +150,14 @@ wasit_diag::diag_enum! {
 }
 
 wasit_diag::diag_enum! {
-    /// The remote shell a connect attempt's bootstrap runs in.
+    /// The command line a connect attempt's bootstrap starts with.
     pub enum BootShell {
-        /// POSIX `sh` (Unix hosts, WSL, and the first try of a host never connected).
+        /// POSIX `sh` (a WSL distribution: it has no other shell).
         Posix,
-        /// PowerShell and the compiled boot program (native Windows OpenSSH).
-        Powershell,
-    }
-}
-
-wasit_diag::diag_enum! {
-    /// Why a host first tried as POSIX is asked again as native Windows.
-    pub enum WindowsRetryWhy {
-        /// The `sh` that answered is a Windows port (MINGW, MSYS, Cygwin): its report names it.
-        MingwSh,
-        /// The remote command ran but printed no bootstrap report (cmd.exe has no `sh`).
-        NoReport,
+        /// One line every default shell of an ssh server runs (POSIX shells, cmd.exe,
+        /// PowerShell): it starts `sh` on a POSIX host and `cmd.exe` on native Windows, so
+        /// the platform is never guessed beforehand nor detected by failing.
+        Universal,
     }
 }
 
@@ -348,6 +340,9 @@ wasit_diag::diag_enum! {
         Retargeted,
         /// The user signed out of the host.
         SignedOut,
+        /// Found at the hub's start under a name no host has any more (the host was removed or
+        /// its route edited while the hub was not running).
+        Orphan,
     }
 }
 
@@ -607,13 +602,6 @@ wasit_diag::diag_events! {
             arch: Code,
             installed: Option<Ident>,
             ms: Ms,
-        },
-        /// The host is asked again as native Windows (PowerShell).
-        #[diag(ev = "boot.windows_retry", budget = 300)]
-        BootWindowsRetry {
-            host: Ident,
-            n: u64,
-            why: WindowsRetryWhy,
         },
         /// What the hub told the bootstrap to do. `bytes`: the helper's size (an upload).
         /// `target`: the host's target triple.

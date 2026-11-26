@@ -244,28 +244,117 @@ pub fn control_socket(dir: &Path, id: &str, kind: &HostKind) -> PathBuf {
     dir.join(name)
 }
 
-/// The POSIX bootstrap (no single quotes inside: it is wrapped in `sh -c '…'`).
-pub const POSIX_BOOTSTRAP: &str = concat!(
-    "b=\"$HOME/.marsad/bin/$(uname -s)-$(uname -m)/marsad-agent\"; v=none; ",
-    "if [ -x \"$b\" ]; then v=$(\"$b\" --version 2>/dev/null | tr -d \" \"); [ -n \"$v\" ] || v=none; fi; ",
-    "echo \"MARSAD-BOOT $(uname -s) $(uname -m) $v\"; ",
-    "read c n || exit 65; ",
-    "case \"$c\" in ",
-    "UPLOAD) t=\"$b.new.$(uname -n).$$\"; mkdir -p \"${b%/*}\" && head -c \"$n\" > \"$t\" && ",
-    "{ s=$(wc -c < \"$t\" | tr -d \" \"); [ \"$s\" = \"$n\" ] || { echo \"marsad bootstrap: received $s of $n bytes of the helper; not installed\" >&2; false; }; } && ",
-    "chmod 755 \"$t\" && mv -f \"$t\" \"$b\" || { rm -f \"$t\"; exit 70; }; ",
-    "\"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
-    "RESTART) \"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
-    "RUN) echo MARSAD-OK;; ",
-    "*) exit 64;; esac; ",
-    "exec \"$b\" bridge --host-id "
-);
+/// What a bootstrap is for: the host's id, the hub's id and the hub's build (the helper
+/// directory it looks in and installs into).
+#[derive(Debug, Clone, Copy)]
+pub struct BootTarget<'a> {
+    pub host_id: &'a str,
+    pub hub_id: &'a str,
+    pub build: &'a str,
+}
 
-/// The Windows bootstrap's protocol side: a small C# program, compiled on the host by
-/// [`POWERSHELL_BOOTSTRAP`] into `%LOCALAPPDATA%\Marsad\bin\marsad-boot-<hash>.exe`. It speaks
-/// the line protocol with exact, unbuffered reads of stdin and ends with `MARSAD-OK`; cmd.exe
-/// then starts the bridge (see [`windows_bootstrap`]). A failure ends it with one plain line on
-/// stderr and exit 1, so cmd.exe starts nothing more and the connection closes.
+/// The directory name of `build` under the helper directory: only characters every shell and
+/// file system takes as they are (`[A-Za-z0-9._+-]`), anything else `_`.
+pub fn build_dir(build: &str) -> String {
+    let d: String = build
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if d.is_empty() || d.chars().all(|c| c == '.') {
+        "unknown".to_owned()
+    } else {
+        d
+    }
+}
+
+/// Whether `id` can be passed to a remote shell unquoted (host ids are restricted to this at
+/// `hosts.add`; hub ids are hex).
+pub fn safe_host_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// What starts a POSIX bootstrap: `sh` says it is there ([`crate::bootwire::SH_READY`]) and runs
+/// the one line the hub sends next ([`posix_script`]). The script travels on the connection, not
+/// on the command line, so no shell between the hub and `sh` ever parses it.
+pub const SH_STARTER: &str = "echo MARSAD-SH; IFS= read -r l; eval \"$l\"";
+
+/// The command line of an ssh host, whatever its default shell (B9, U8: no platform is assumed
+/// and none is detected by failing). The same text is three programs:
+///
+/// * a POSIX shell (sh, bash, zsh, fish, csh/tcsh) runs `exec sh -c '<SH_STARTER>'` and never
+///   reaches the rest (it parses it: every part is valid in all of them);
+/// * cmd.exe (OpenSSH for Windows' default) has no `'` quoting and splits at `&`: `exec` is not
+///   a command, then `cmd.exe /d /s /c "<windows line>"` runs, then `rem` ends the line;
+/// * PowerShell (a configured default) finds neither `exec` nor `rem` (errors on stderr, it goes
+///   on) and runs `cmd.exe --% /d /s /c "<windows line>"` (`--%`: the rest is passed as is).
+///
+/// The Windows line holds no `"` or `'` ([`windows_line`]), which is what keeps it inside the
+/// quotes of all three.
+pub fn universal_command(t: BootTarget<'_>) -> String {
+    let win = windows_line(t);
+    format!("exec sh -c '{SH_STARTER}' ; rem '& cmd.exe /d /s /c \"{win}\" & rem ' ; cmd.exe --% /d /s /c \"{win}\"")
+}
+
+/// The helper's arguments after `boot`.
+fn boot_args(t: BootTarget<'_>) -> String {
+    format!("boot --host-id {} --hub-id {}", t.host_id, t.hub_id)
+}
+
+/// The POSIX bootstrap, one line, sent after `MARSAD-SH`. A helper of the hub's build in
+/// `~/.marsad/bin/<build>/<uname -s>-<uname -m>/` takes over (`exec … boot`). Without one, it
+/// reports itself (`helper_build=none` and the checksum tool it has: `sha256sum`,
+/// `shasum -a 256` or `openssl`, else `none` and the hub installs nothing), receives
+/// `UPLOAD <n> <sha256>`, writes exactly `n` bytes to a temporary file, checks their number and
+/// their SHA-256, links the file into place (atomic, never over a helper another machine of a shared home
+/// just installed) and hands over to the new helper with
+/// `--installed`. Any failure removes the temporary file and answers `MARSAD-FAIL`. A Windows
+/// port of `sh` (MSYS2, Git for Windows, Cygwin) as the account's default shell: `uname -s`
+/// says so, and the Windows bootstrap runs instead (its path translation off).
+pub fn posix_script(t: BootTarget<'_>) -> String {
+    let build = build_dir(t.build);
+    let args = boot_args(t);
+    // `sh` runs this copy: its `$` must reach cmd.exe as it is.
+    let win = windows_line(t).replace('$', "\\$");
+    [
+        &format!("b=\"$HOME/.marsad/bin/{build}/$(uname -s)-$(uname -m)\"; a=\"$b/marsad-agent\"; "),
+        &format!("case \"$(uname -s)\" in MINGW*|MSYS*|CYGWIN*) MSYS2_ARG_CONV_EXCL=\"*\" MSYS_NO_PATHCONV=1 exec cmd.exe /d /s /c \"{win}\";; esac; "),
+        &format!("[ -x \"$a\" ] && exec \"$a\" {args}; "),
+        "h=none; for t in sha256sum shasum openssl; do if command -v $t >/dev/null 2>&1; then h=$t; break; fi; done; ",
+        "echo \"MARSAD-BOOT2 os=$(uname -s) arch=$(uname -m) helper_build=none daemon=unknown hasher=$h\"; ",
+        "IFS=\" \" read -r c n s || exit 65; ",
+        "f() { rm -f \"$t\"; echo \"MARSAD-FAIL stage=install reason=$1\"; echo \"marsad bootstrap: $1\" >&2; exit 70; }; t=; ",
+        "[ \"$c\" = UPLOAD ] || f unexpected%20command; ",
+        "[ \"$h\" != none ] || f no%20checksum%20tool; ",
+        "t=\"$a.new.$(uname -n).$$\"; mkdir -p \"$b\" || f cannot%20create%20the%20helper%20directory; ",
+        "head -c \"$n\" > \"$t\" || f cannot%20write%20the%20helper; ",
+        "r=$(wc -c < \"$t\" | tr -d \" \"); [ \"$r\" = \"$n\" ] || f received%20$r%20of%20$n%20bytes%20of%20the%20helper; ",
+        "case $h in sha256sum) x=$(sha256sum \"$t\");; shasum) x=$(shasum -a 256 \"$t\");; *) x=$(openssl dgst -sha256 -r \"$t\");; esac; x=${x%% *}; ",
+        "[ \"$x\" = \"$s\" ] || f \"checksum%20mismatch%20(received%20$x)\"; ",
+        // `ln`: into place only if no other machine of a shared home installed this build
+        // meanwhile (replacing a helper another bootstrap runs would pull it from under it);
+        // `mv` where the file system has no hard links.
+        "chmod 755 \"$t\" || f cannot%20install%20the%20helper; ",
+        "ln \"$t\" \"$a\" 2>/dev/null || [ -x \"$a\" ] || mv -f \"$t\" \"$a\" || f cannot%20install%20the%20helper; rm -f \"$t\"; ",
+        &format!("exec \"$a\" {args} --installed"),
+    ]
+    .concat()
+}
+
+/// The Windows bootstrap's protocol side when no helper of the hub's build is installed: a small
+/// C# program, compiled on the host by [`POWERSHELL_BOOTSTRAP`] into
+/// `%LOCALAPPDATA%\Marsad\bin\marsad-boot-<hash>.exe`. It reports (`helper_build=none`), receives
+/// `UPLOAD <n> <sha256>` with exact, unbuffered reads of stdin, checks the size and SHA-256 and
+/// renames the file into the build's directory; cmd.exe then starts the new helper's `boot`
+/// (see [`windows_line`]). A failure answers `MARSAD-FAIL` and exits 1, so nothing more starts.
 ///
 /// Why not PowerShell itself: OpenSSH for Windows hands the command a stdin pipe opened for
 /// overlapped I/O, and Windows PowerShell 5.1 (the .NET Framework's console stream) reads it
@@ -274,21 +363,23 @@ pub const POSIX_BOOTSTRAP: &str = concat!(
 /// input reader takes nothing from the connection.
 pub const WINDOWS_BOOT_CS: &str = include_str!("windows_boot.cs");
 
-/// Compiles [`WINDOWS_BOOT_CS`] (raw deflate, base64, in `%MARSAD_BOOT_CS%`) to
-/// `marsad-boot-@HASH@.exe` unless it is there. Errors come back as one plain line on stderr and exit 1 (no CLIXML
-/// error record).
+/// Run from `%MARSAD_PS%` (UTF-8, base64). Compiles [`WINDOWS_BOOT_CS`] (raw deflate, base64,
+/// in `%MARSAD_BOOT_CS%`) to
+/// `marsad-boot-@HASH@.exe` unless it is there. Errors come back as one plain line on stderr and
+/// exit 1 (no CLIXML error record).
 pub const POWERSHELL_BOOTSTRAP: &str = r#"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 trap { $m=[Text.Encoding]::UTF8.GetBytes("Marsad bootstrap: $_`n"); $e=[Console]::OpenStandardError(); $e.Write($m,0,$m.Length); $e.Flush(); exit 1 }
 $d=Join-Path $env:LOCALAPPDATA 'Marsad\bin'; $x=Join-Path $d 'marsad-boot-@HASH@.exe'
 if (-not (Test-Path $x)) {
-New-Item -ItemType Directory -Force $d | Out-Null; $t="$x.$PID.exe"
+$t="$x.$PID.exe"
 $z=New-Object IO.Compression.DeflateStream(([IO.MemoryStream][Convert]::FromBase64String($env:MARSAD_BOOT_CS)),[IO.Compression.CompressionMode]::Decompress)
 Add-Type -OutputType ConsoleApplication -OutputAssembly $t -TypeDefinition (New-Object IO.StreamReader($z)).ReadToEnd()
 if (Test-Path $x) { Remove-Item $t } else { Move-Item $t $x }
 }
 "#;
 
-/// cmd.exe's longest command line; the Windows bootstrap must fit.
+/// cmd.exe's longest command line; the whole [`universal_command`] must fit, as cmd.exe parses
+/// all of it (the Windows line twice).
 pub const CMD_MAX_LINE: usize = 8191;
 
 /// The name part of the compiled boot program: changes with its source (FNV-1a).
@@ -301,104 +392,58 @@ fn windows_boot_hash() -> String {
     format!("{h:016x}")
 }
 
-/// The Windows bootstrap, as one cmd.exe command line (OpenSSH for Windows' default shell):
-/// PowerShell with stdin from NUL makes sure the boot program exists (`-EncodedCommand`: no
-/// quoting through ssh/cmd), the boot program speaks the protocol, then the bridge starts on
-/// the same stdin. Each step runs only if the one before succeeded. The program's source goes
-/// in an environment variable (base64 is plain text to cmd.exe; inside `-EncodedCommand` it
-/// would take 2.7 times the room), cleared before the boot program and the bridge start.
-pub fn windows_bootstrap(id: &str) -> String {
+/// The Windows bootstrap, one cmd.exe command line without `"` or `'` (see
+/// [`universal_command`]): in `%LOCALAPPDATA%\Marsad\bin` (made if missing; `cd /d` takes a path
+/// with spaces unquoted), a helper of the hub's build in `<build>\Windows-<arch>\` takes over;
+/// without one, PowerShell (stdin from NUL) makes sure the boot program exists (its script
+/// from an environment variable: no quoting), the boot program installs the upload, and the new helper
+/// takes over with `--installed`. Each step runs only if the one before succeeded. The boot
+/// program's source goes in an environment variable (base64 is plain text to cmd.exe), cleared
+/// before any program that keeps running starts.
+pub fn windows_line(t: BootTarget<'_>) -> String {
     let hash = windows_boot_hash();
     let b64 = base64::engine::general_purpose::STANDARD;
-    let source = miniz_oxide::deflate::compress_to_vec(WINDOWS_BOOT_CS.as_bytes(), 10);
+    // Comments are for the reader of this repository, not worth room on cmd.exe's line.
+    let code: String = WINDOWS_BOOT_CS
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = miniz_oxide::deflate::compress_to_vec(code.as_bytes(), 10);
     let script = POWERSHELL_BOOTSTRAP.replace("@HASH@", &hash);
-    let utf16: Vec<u8> = script
-        .encode_utf16()
-        .flat_map(|u| u.to_le_bytes())
-        .collect();
-    let dir = "%LOCALAPPDATA%\\Marsad\\bin";
+    let p = format!("{}\\Windows-%PROCESSOR_ARCHITECTURE%", build_dir(t.build));
+    let args = boot_args(t);
+    // PowerShell's script travels as UTF-8 base64 in an environment variable too (a third of
+    // `-EncodedCommand`'s UTF-16 size); `^(`/`^)`: parentheses inside cmd.exe's block.
+    let ps = "powershell -NoProfile -NonInteractive -Command iex^([Text.Encoding]::UTF8.GetString^([Convert]::FromBase64String^($env:MARSAD_PS^)^)^) <NUL";
     format!(
-        "set MARSAD_BOOT_CS={}&& powershell -NoProfile -NonInteractive -EncodedCommand {} <NUL && set MARSAD_BOOT_CS=&& \"{dir}\\marsad-boot-{hash}.exe\" && \"{dir}\\marsad-agent.exe\" bridge --host-id {id}",
+        "set MARSAD_BOOT_CS={}&& set MARSAD_PS={}&& cd /d %LOCALAPPDATA% && (if not exist Marsad\\bin mkdir Marsad\\bin) && cd Marsad\\bin && (if exist {p}\\marsad-agent.exe (set MARSAD_BOOT_CS=&& set MARSAD_PS=&& {p}\\marsad-agent.exe {args}) else ({ps} && set MARSAD_BOOT_CS=&& set MARSAD_PS=&& marsad-boot-{hash}.exe {p} && {p}\\marsad-agent.exe {args} --installed))",
         b64.encode(source),
-        b64.encode(utf16)
+        b64.encode(script.as_bytes())
     )
 }
 
-/// Whether `id` can be passed to the remote shell unquoted (host ids are restricted to this
-/// at `hosts.add`).
-pub fn safe_host_id(id: &str) -> bool {
-    !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-}
-
-/// The POSIX bootstrap for host `id` (see [`safe_host_id`]).
-pub fn posix_bootstrap(id: &str) -> String {
-    format!("{POSIX_BOOTSTRAP}{id}")
-}
-
-/// Which bootstrap a host gets: POSIX `sh`, or PowerShell for native Windows (OpenSSH for
-/// Windows runs commands with cmd.exe or PowerShell).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteShell {
-    Posix,
-    PowerShell,
-}
-
-impl RemoteShell {
-    /// What the host's known platform says (a host never connected is tried with `sh`).
-    pub fn for_entry(entry: &HostEntry) -> RemoteShell {
-        match &entry.kind {
-            HostKind::Ssh { .. } if entry.platform.as_ref().is_some_and(|p| p.os == "windows") => {
-                RemoteShell::PowerShell
-            }
-            _ => RemoteShell::Posix,
-        }
-    }
-}
-
-/// The POSIX bootstrap could not run because the host is native Windows: its shell (cmd.exe
-/// or PowerShell) has no `sh`, or the `sh` it found is a Windows port (Git for Windows, MSYS2,
-/// Cygwin, busybox-w32) whose `uname -s` is not a platform Marsad ships for. Given what the
-/// host printed instead of a report, or the `<os>` of its report.
-pub fn native_windows_sign(printed: &str) -> bool {
-    let missing_sh = printed.contains("'sh' is not recognized as an internal or external command")
-        || printed.contains("The term 'sh' is not recognized");
-    let os = printed.trim().to_ascii_uppercase();
-    missing_sh
-        || ["MINGW", "MSYS", "CYGWIN", "WINDOWS_NT"]
-            .iter()
-            .any(|p| os.starts_with(p))
-}
-
-/// Full argv of one connect attempt without a shared connection: transport + the bootstrap for
-/// `shell`. `None` for the local host, or a host id that is not [`safe_host_id`].
-pub fn bootstrap_argv(entry: &HostEntry, shell: RemoteShell) -> Option<Vec<String>> {
-    bootstrap_argv_via(entry, shell, SshRoute::Plain)
-}
-
-/// Full argv of one link step or connect attempt by `route`: the transport of the route + the
-/// bootstrap for `shell`. For [`SshRoute::SignIn`] there is no remote command (the sign-in
-/// step runs none). `None` for the local host, or a host id that is not [`safe_host_id`].
+/// Full argv of one link step or connect attempt by `route`: the transport of the route and the
+/// starter of the bootstrap (for an ssh host the [`universal_command`], for a WSL host `sh`
+/// running [`SH_STARTER`]). For [`SshRoute::SignIn`] there is no remote command (the sign-in step
+/// runs none). `None` for the local host, or a host or hub id that is not [`safe_host_id`].
 pub fn bootstrap_argv_via(
     entry: &HostEntry,
-    shell: RemoteShell,
+    t: BootTarget<'_>,
     route: SshRoute<'_>,
 ) -> Option<Vec<String>> {
     let mut argv = transport_prefix_via(&entry.kind, route)?;
-    let id = entry.id.as_str();
-    if !safe_host_id(id) {
+    if !safe_host_id(entry.id.as_str()) || !safe_host_id(t.host_id) || !safe_host_id(t.hub_id) {
         return None;
     }
     if matches!(route, SshRoute::SignIn { .. }) {
         return Some(argv);
     }
-    match (&entry.kind, shell) {
-        (HostKind::Wsl { .. }, _) => argv.push(posix_bootstrap(id)),
-        (_, RemoteShell::PowerShell) => argv.push(windows_bootstrap(id)),
-        (_, RemoteShell::Posix) => argv.push(format!("sh -c '{}'", posix_bootstrap(id))),
-    }
+    argv.push(match &entry.kind {
+        HostKind::Wsl { .. } => SH_STARTER.to_owned(),
+        _ => universal_command(t),
+    });
     Some(argv)
 }
 
@@ -488,6 +533,12 @@ mod tests {
         }
     }
 
+    const T: BootTarget<'static> = BootTarget {
+        host_id: "h",
+        hub_id: "0123456789abcdef",
+        build: "0.2.0+abc.dirty",
+    };
+
     #[test]
     fn ssh_argv_keepalive_port_identity_and_no_batch_mode() {
         let e = entry(HostKind::Ssh {
@@ -498,7 +549,7 @@ mod tests {
         });
         // Without a shared connection (a Windows hub): the whole attempt in one command that may
         // prompt, and a user's ssh configuration cannot put it on a connection of its own.
-        let a = bootstrap_argv(&e, RemoteShell::for_entry(&e)).unwrap();
+        let a = bootstrap_argv_via(&e, T, SshRoute::Plain).unwrap();
         assert_eq!(a[0], "ssh");
         for o in [
             "ServerAliveInterval=15",
@@ -511,15 +562,13 @@ mod tests {
         }
         assert!(!a.iter().any(|x| x.starts_with("BatchMode")));
         assert_eq!(a[a.len() - 2], "me@box");
-        assert!(a.last().unwrap().starts_with("sh -c 'b="));
-        assert!(!POSIX_BOOTSTRAP.contains('\''));
+        assert_eq!(a.last().unwrap(), &universal_command(T));
         // The sign-in step of a shared connection (only this step may prompt): no BatchMode,
         // no remote command, the keep-alive of the connection that will live on, and the master
         // a background process of ssh's own (`ControlPersist=yes`) that the hub starts without
         // `-f` and never reads stdin of (`-n`), logging next to its socket.
         let ctl = Path::new("/run/m/ssh/0123456789abcdef");
-        let sign =
-            bootstrap_argv_via(&e, RemoteShell::Posix, SshRoute::SignIn { control: ctl }).unwrap();
+        let sign = bootstrap_argv_via(&e, T, SshRoute::SignIn { control: ctl }).unwrap();
         assert_eq!(&sign[..2], ["ssh", "-o"], "{sign:?}");
         for o in [
             "ServerAliveInterval=15",
@@ -547,8 +596,7 @@ mod tests {
             "no remote command"
         );
         // A link step rides the master and can never prompt.
-        let link =
-            bootstrap_argv_via(&e, RemoteShell::Posix, SshRoute::Link { control: ctl }).unwrap();
+        let link = bootstrap_argv_via(&e, T, SshRoute::Link { control: ctl }).unwrap();
         for o in [
             "-T",
             "BatchMode=yes",
@@ -562,7 +610,6 @@ mod tests {
             assert!(link.iter().any(|x| x == o), "{o} in {link:?}");
         }
         assert_eq!(link[link.len() - 2], "me@box");
-        assert!(link.last().unwrap().starts_with("sh -c 'b="));
         assert!(!link.iter().any(|x| x == "-M" || x == "-f" || x == "-E"));
         // The questions asked of the master are local and carry no remote command either.
         for (what, word) in [
@@ -584,10 +631,11 @@ mod tests {
             q.iter().any(|x| x == "ControlPath=/run/100%%/ssh/x"),
             "{q:?}"
         );
+        // A WSL distribution has only POSIX `sh`: the starter, as one argument.
         let w = entry(HostKind::Wsl {
             distro: "Ubuntu".into(),
         });
-        let wa = bootstrap_argv(&w, RemoteShell::for_entry(&w)).unwrap();
+        let wa = bootstrap_argv_via(&w, T, SshRoute::Plain).unwrap();
         assert!(wa[0].ends_with("wsl.exe"));
         assert_eq!(
             &wa[1..],
@@ -599,69 +647,75 @@ mod tests {
                 "--exec",
                 "sh",
                 "-lc",
-                &posix_bootstrap("h")
+                SH_STARTER
             ]
         );
-        assert_eq!(wa.last().unwrap(), &posix_bootstrap("h"));
-        assert!(wa.last().unwrap().ends_with("bridge --host-id h"));
         let mut bad = e.clone();
         bad.id = "a b;c".into();
-        assert!(bootstrap_argv(&bad, RemoteShell::Posix).is_none());
-        let mut win = e.clone();
-        win.platform = platform_from("Windows", "AMD64");
-        assert_eq!(RemoteShell::for_entry(&win), RemoteShell::PowerShell);
-        assert!(bootstrap_argv(&win, RemoteShell::for_entry(&win))
-            .unwrap()
-            .last()
-            .unwrap()
-            .contains("-EncodedCommand "));
-        // cmd.exe runs the boot program, then the bridge, each only if the step before worked.
-        let w = windows_bootstrap(&"h".repeat(64));
-        assert!(w.starts_with("set MARSAD_BOOT_CS="));
-        assert!(w.contains(
-            " <NUL && set MARSAD_BOOT_CS=&& \"%LOCALAPPDATA%\\Marsad\\bin\\marsad-boot-"
-        ));
-        assert!(w.ends_with(&format!(
-            ".exe\" && \"%LOCALAPPDATA%\\Marsad\\bin\\marsad-agent.exe\" bridge --host-id {}",
-            "h".repeat(64)
+        assert!(bootstrap_argv_via(&bad, T, SshRoute::Plain).is_none());
+        let bad_hub = BootTarget { hub_id: "x;y", ..T };
+        assert!(bootstrap_argv_via(&e, bad_hub, SshRoute::Plain).is_none());
+        assert!(bootstrap_argv_via(&entry(HostKind::Local), T, SshRoute::Plain).is_none());
+    }
+
+    /// The one command line holds a part for every default shell, and the parts cannot break
+    /// out of each other's quoting: the Windows line has no quote of either kind and the POSIX
+    /// starter no single quote; cmd.exe parses the whole line, which must fit its limit with
+    /// the longest host id.
+    #[test]
+    fn the_universal_command_fits_cmd_and_keeps_its_parts_quoted() {
+        let long = "h".repeat(64);
+        let t = BootTarget {
+            host_id: &long,
+            ..T
+        };
+        let win = windows_line(t);
+        assert!(!win.contains('"') && !win.contains('\''), "{win}");
+        assert!(!SH_STARTER.contains('\''));
+        let line = universal_command(t);
+        assert!(line.len() < CMD_MAX_LINE, "{} chars", line.len());
+        assert!(line.starts_with("exec sh -c 'echo MARSAD-SH; "), "{line}");
+        assert!(line.contains(&format!("' ; rem '& cmd.exe /d /s /c \"{win}\" & rem ' ; ")));
+        assert!(line.ends_with(&format!("cmd.exe --% /d /s /c \"{win}\"")));
+        // The helper of the hub's build, else the boot program and then the new helper.
+        assert!(win.contains(&format!(
+            "(if exist 0.2.0+abc.dirty\\Windows-%PROCESSOR_ARCHITECTURE%\\marsad-agent.exe (set MARSAD_BOOT_CS=&& set MARSAD_PS=&& 0.2.0+abc.dirty\\Windows-%PROCESSOR_ARCHITECTURE%\\marsad-agent.exe boot --host-id {long} --hub-id 0123456789abcdef) else (powershell -NoProfile "
+        )), "{win}");
+        assert!(win.ends_with(&format!(
+            "marsad-agent.exe boot --host-id {long} --hub-id 0123456789abcdef --installed))"
         )));
-        assert!(w.len() < CMD_MAX_LINE, "{} chars", w.len());
-        // A host not connected yet is tried with sh; told it is Windows, with PowerShell.
-        assert!(bootstrap_argv(&e, RemoteShell::PowerShell)
-            .unwrap()
-            .last()
-            .unwrap()
-            .contains("&& powershell -NoProfile -NonInteractive -EncodedCommand "));
-        assert!(bootstrap_argv(&entry(HostKind::Local), RemoteShell::Posix).is_none());
+        // The POSIX script is sent on the connection: one line.
+        let script = posix_script(t);
+        assert!(!script.contains('\n'));
+        assert!(script.contains("$HOME/.marsad/bin/0.2.0+abc.dirty/$(uname -s)-$(uname -m)"));
+        assert!(script.ends_with(&format!(
+            "exec \"$a\" boot --host-id {long} --hub-id 0123456789abcdef --installed"
+        )));
+        // Both parse in every POSIX shell at hand (`-n`: parse only).
+        #[cfg(unix)]
+        for shell in ["sh", "bash", "zsh", "dash"] {
+            for text in [&script, &line] {
+                let Ok(out) = std::process::Command::new(shell)
+                    .args(["-n", "-c", text])
+                    .output()
+                else {
+                    continue; // not installed
+                };
+                assert!(
+                    out.status.success(),
+                    "{shell}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
     }
 
     #[test]
-    fn native_windows_is_recognised_from_what_the_posix_bootstrap_got() {
-        // cmd.exe (OpenSSH for Windows' default shell) and PowerShell without `sh`.
-        assert!(native_windows_sign(
-            "'sh' is not recognized as an internal or external command,\r\noperable program or batch file."
-        ));
-        assert!(native_windows_sign(
-            "sh : The term 'sh' is not recognized as the name of a cmdlet, function, script file"
-        ));
-        // `sh` from Git for Windows / MSYS2 / Cygwin / busybox-w32 answered the report.
-        for os in [
-            "MINGW64_NT-10.0-20348",
-            "MSYS_NT-10.0",
-            "CYGWIN_NT-10.0-19045",
-            "Windows_NT",
-        ] {
-            assert!(native_windows_sign(os), "{os}");
-            assert!(platform_from(os, "x86_64").is_none(), "{os}");
-        }
-        for other in [
-            "Linux",
-            "Darwin",
-            "sh: 1: marsad-agent: not found",
-            "Permission denied",
-        ] {
-            assert!(!native_windows_sign(other), "{other}");
-        }
+    fn build_directories_are_plain_names() {
+        assert_eq!(build_dir("0.2.0+abc.dirty"), "0.2.0+abc.dirty");
+        assert_eq!(build_dir("a b/c\\d\"e'f"), "a_b_c_d_e_f");
+        assert_eq!(build_dir(".."), "unknown");
+        assert_eq!(build_dir(""), "unknown");
     }
 
     #[test]

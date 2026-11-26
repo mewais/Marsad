@@ -1,9 +1,10 @@
-// The Windows bootstrap's protocol side (see transport.rs: WINDOWS_BOOT_CS). C# 5, compiled on
+// The Windows bootstrap's install step (see transport.rs: WINDOWS_BOOT_CS). C# 5, compiled on
 // the host by Windows PowerShell's Add-Type (the .NET Framework compiler every Windows has).
+// Argument: the build's helper directory. Reports, receives UPLOAD <n> <sha256>, installs.
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
@@ -17,11 +18,9 @@ static class MarsadBoot
 
     static Stream input, output = Console.OpenStandardOutput();
 
-    // OpenSSH for Windows hands a command a pipe opened for overlapped I/O. The .NET Framework's
-    // console stream reads it synchronously, which returns what is already there and then never
-    // completes; a FileStream opened as asynchronous reads it properly. A synchronous handle
-    // (FILE_SYNCHRONOUS_IO_ALERT / _NONALERT in its mode) is read synchronously. Unbuffered
-    // either way: the bridge started after this program gets every byte it did not read.
+    // OpenSSH for Windows hands a command a pipe opened for overlapped I/O; a FileStream opened
+    // as asynchronous reads it properly (a synchronous handle is read synchronously).
+    // Unbuffered: the helper started after this program gets every byte it did not read.
     static Stream OpenInput()
     {
         IntPtr h = GetStdHandle(-10);
@@ -37,6 +36,11 @@ static class MarsadBoot
         output.Flush();
     }
 
+    static string Esc(string v)
+    {
+        return v.Replace("%", "%25").Replace(" ", "%20").Replace("=", "%3D").Replace("\r", "%0D").Replace("\n", "%0A");
+    }
+
     static string ReadLine()
     {
         var s = new StringBuilder();
@@ -44,91 +48,52 @@ static class MarsadBoot
         {
             int c = input.ReadByte();
             if (c < 0) throw new Exception("the connection closed during the bootstrap");
-            if (c == '\n') return s.ToString();
+            if (c == '\n') return s.ToString().TrimEnd('\r');
             s.Append((char)c);
         }
     }
 
-    // Runs the installed helper with its own stdin and stdout (not the connection's).
-    static string Helper(string exe, string args)
+    static int Main(string[] args)
     {
-        var info = new ProcessStartInfo(exe, args);
-        info.UseShellExecute = false;
-        info.CreateNoWindow = true;
-        info.RedirectStandardInput = true;
-        info.RedirectStandardOutput = true;
-        using (var p = Process.Start(info))
-        {
-            p.StandardInput.Close();
-            string text = p.StandardOutput.ReadToEnd();
-            p.WaitForExit();
-            return text;
-        }
-    }
-
-    static int Main()
-    {
+        string tmp = null;
         try
         {
             input = OpenInput();
-            string dir = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA"), "Marsad", "bin");
+            string dir = Path.GetFullPath(args[0]);
             string exe = Path.Combine(dir, "marsad-agent.exe");
-            int pid = Process.GetCurrentProcess().Id;
-            string version = "none";
-            if (File.Exists(exe))
-            {
-                version = Helper(exe, "--version").Replace(" ", "").Replace("\r", "").Replace("\n", "");
-                if (version == "") version = "none";
-            }
-            Say("MARSAD-BOOT Windows " + Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") + " " + version);
+            Say("MARSAD-BOOT2 os=Windows arch=" + Esc(Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")) + " helper_build=none daemon=unknown hasher=sha256");
             string[] cmd = ReadLine().Split(' ');
-            if (cmd[0] == "UPLOAD")
+            if (cmd.Length != 3 || cmd[0] != "UPLOAD") throw new Exception("unexpected command " + cmd[0]);
+            long total = long.Parse(cmd[1]);
+            long left = total;
+            Directory.CreateDirectory(dir);
+            tmp = exe + ".new." + System.Diagnostics.Process.GetCurrentProcess().Id;
+            byte[] hash;
+            using (var f = File.Create(tmp))
+            using (var sha = SHA256.Create())
             {
-                long total = long.Parse(cmd[1]);
-                long left = total;
-                string tmp = exe + ".new." + pid;
-                try
+                var buf = new byte[65536];
+                while (left > 0)
                 {
-                    // Exactly the announced number of bytes, or nothing is installed.
-                    using (var f = File.Create(tmp))
-                    {
-                        var buf = new byte[65536];
-                        while (left > 0)
-                        {
-                            int n = input.Read(buf, 0, (int)Math.Min(buf.Length, left));
-                            if (n <= 0) throw new Exception("received " + (total - left) + " of " + total + " bytes of the helper; not installed");
-                            f.Write(buf, 0, n);
-                            left -= n;
-                        }
-                    }
+                    int n = input.Read(buf, 0, (int)Math.Min(buf.Length, left));
+                    if (n <= 0) throw new Exception("received " + (total - left) + " of " + total + " bytes of the helper");
+                    f.Write(buf, 0, n);
+                    sha.TransformBlock(buf, 0, n, null, 0);
+                    left -= n;
                 }
-                catch
-                {
-                    File.Delete(tmp);
-                    throw;
-                }
-                if (File.Exists(exe))
-                {
-                    Helper(exe, "stop");
-                    // Windows keeps a running executable's file: the old one is renamed away.
-                    // Copies left by earlier updates go once nothing runs them any more.
-                    foreach (string old in Directory.GetFiles(dir, "marsad-agent.exe.old.*"))
-                    {
-                        try { File.Delete(old); }
-                        catch (UnauthorizedAccessException) { /* still running */ }
-                        catch (IOException) { /* still running */ }
-                    }
-                    File.Move(exe, exe + ".old." + pid);
-                }
-                File.Move(tmp, exe);
+                sha.TransformFinalBlock(buf, 0, 0);
+                hash = sha.Hash;
             }
-            else if (cmd[0] == "RESTART") Helper(exe, "stop");
-            else if (cmd[0] != "RUN") throw new Exception("unknown command " + cmd[0]);
-            Say("MARSAD-OK");
+            string got = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+            if (got != cmd[2]) throw new Exception("checksum mismatch (received " + got + ")");
+            // Another connection may have installed the same build meanwhile: its file stays.
+            if (File.Exists(exe)) File.Delete(tmp); else File.Move(tmp, exe);
             return 0;
         }
         catch (Exception e)
         {
+            if (tmp != null) { try { File.Delete(tmp); } catch (Exception) { } }
+            Say("MARSAD-FAIL stage=install reason=" + Esc(e.Message));
             byte[] b = Encoding.UTF8.GetBytes("Marsad bootstrap: " + e.Message + "\n");
             Stream err = Console.OpenStandardError();
             err.Write(b, 0, b.Length);

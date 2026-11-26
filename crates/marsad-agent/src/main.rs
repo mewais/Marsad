@@ -8,7 +8,7 @@ use marsad_agent::{cli::Options, serve, version};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: marsad-agent serve [--hub] [options] | bridge [options] | stop [options] | diagnostics export [options] | shim <args> | mcp --socket <path> --session <id> | --version"
+        "usage: marsad-agent serve [--hub] [options] | bridge [options] | boot --host-id <id> --hub-id <hub> [options] | stop [options] | diagnostics export [options] | shim <args> | mcp --socket <path> --session <id> | --version"
     );
     ExitCode::from(2)
 }
@@ -128,7 +128,7 @@ fn main() -> ExitCode {
                 }
             };
         }
-        Some("serve" | "bridge" | "stop") => {}
+        Some("serve" | "bridge" | "stop" | "boot") => {}
         _ => return usage(),
     }
     let rest: Vec<String> = match args.map(|a| a.into_string()).collect() {
@@ -148,7 +148,7 @@ fn main() -> ExitCode {
     let role = match cmd.to_str() {
         Some("serve") if opts.hub => Role::Hub,
         Some("serve") => Role::Daemon,
-        Some("bridge") => Role::Bridge,
+        Some("bridge" | "boot") => Role::Bridge,
         _ => Role::Stop,
     };
     // The sink first (a runtime that cannot start is then on record too); `tracing` is only
@@ -169,6 +169,7 @@ fn main() -> ExitCode {
     let code = match cmd.to_str() {
         Some("serve") => rt.block_on(serve::serve(opts)),
         Some("bridge") => rt.block_on(serve::bridge(opts)),
+        Some("boot") => rt.block_on(marsad_agent::boot::boot(opts)),
         Some("stop") => rt.block_on(serve::stop(opts)),
         _ => usage(),
     };

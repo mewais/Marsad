@@ -44,6 +44,7 @@ rmcp = { version = "0.9", features = ["server", "transport-io"] }
 base64 = "0.22"
 tokio-util = { version = "0.7", features = ["rt"] }
 miniz_oxide = "0.9.1"
+sha2 = "0.10"
 
 [dev-dependencies]
 marsad-agent = { path = ".", features = ["panic-test"] }

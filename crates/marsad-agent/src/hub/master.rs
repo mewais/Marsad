@@ -563,6 +563,104 @@ impl Masters {
     }
 }
 
+impl Masters {
+    /// Ends the shared connections in `<run>/ssh` that belong to no host of `hosts` (G13): a
+    /// host removed, or its route edited, while no hub ran leaves its connection open with
+    /// nobody to end it. Each such socket is asked once (`ssh -O check`, a local question): one
+    /// that answers is ended (`ssh -O exit`), one nobody listens on is removed, one that does
+    /// not answer is left as it is and recorded. Processes are never looked for by name: the
+    /// socket is the only handle there is. Logs of such connections go with them.
+    pub async fn sweep_orphans(&self, hosts: &[HostEntry]) {
+        let keep: std::collections::HashSet<PathBuf> = hosts
+            .iter()
+            .filter(|h| Self::applies(h))
+            .filter_map(|h| self.path(h).ok())
+            .collect();
+        let Ok(rd) = std::fs::read_dir(&self.inner.dir) else {
+            return;
+        };
+        let mut names: Vec<String> = rd
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .collect();
+        names.sort();
+        for name in names {
+            let base = name.strip_suffix(".log").unwrap_or(&name);
+            // Only names this hub makes (16 hex, see `control_socket`).
+            if base.len() != 16 || !base.chars().all(|c| c.is_ascii_hexdigit()) {
+                continue;
+            }
+            let socket = self.inner.dir.join(base);
+            if keep.contains(&socket) {
+                continue;
+            }
+            if name.ends_with(".log") {
+                if tokio::fs::symlink_metadata(&socket).await.is_err() {
+                    let _ = tokio::fs::remove_file(self.inner.dir.join(&name)).await;
+                }
+                continue;
+            }
+            self.end_orphan(base, &socket).await;
+        }
+    }
+
+    async fn end_orphan(&self, name: &str, socket: &Path) {
+        // Any host name does: `-O` only talks to the socket given.
+        let kind = HostKind::Ssh {
+            target: "marsad-orphan".into(),
+            port: None,
+            identity_file: None,
+            options: Vec::new(),
+        };
+        let record = |outcome, exit, stderr: Option<&str>| {
+            emit(MarsadEvent::SshMasterExit {
+                host: Ident::new(name),
+                why: MasterExitWhy::Orphan,
+                outcome,
+                exit,
+                stderr: stderr.filter(|s| !s.is_empty()).map(diag::transport),
+            })
+        };
+        let ask = |what| master_command_argv(&kind, socket, what);
+        let checked = match ask(MasterCommand::Check) {
+            Some(argv) => run_local(argv).await,
+            None => return,
+        };
+        let alive = match checked {
+            Ok(Ran { exit: Some(0), .. }) => true,
+            Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => false,
+            Ok(Ran { exit, stderr }) => {
+                record(MasterExitOutcome::Failed, exit, Some(&stderr));
+                return;
+            }
+            Err(words) => {
+                record(MasterExitOutcome::Failed, None, Some(&words));
+                return;
+            }
+        };
+        if alive {
+            let Some(argv) = ask(MasterCommand::Exit) else {
+                return;
+            };
+            match run_local(argv).await {
+                Ok(Ran { exit: Some(0), .. }) => record(MasterExitOutcome::Ended, Some(0), None),
+                Ok(Ran { exit, stderr }) => {
+                    record(MasterExitOutcome::Failed, exit, Some(&stderr));
+                    return;
+                }
+                Err(words) => {
+                    record(MasterExitOutcome::Failed, None, Some(&words));
+                    return;
+                }
+            }
+        } else {
+            record(MasterExitOutcome::NoMaster, None, None);
+        }
+        let _ = tokio::fs::remove_file(socket).await;
+        let _ = tokio::fs::remove_file(master_log(socket)).await;
+    }
+}
+
 /// The sign-in command of a connection (see [`Masters::sign_in`]).
 pub struct SignInCommand {
     /// The program and its arguments (the program first).
@@ -854,6 +952,8 @@ fn last_lines(text: &str) -> String {
 mod tests {
     use super::*;
 
+    // A Unix socket stands in for a master (shared connections are Unix-only).
+    #[cfg(unix)]
     /// A control socket that accepts every connection and drops it at once: a master that
     /// answers nothing. The accept loop runs until the returned handle is aborted.
     fn dropping_socket(control: &Path) -> tokio::task::JoinHandle<()> {
@@ -865,6 +965,7 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     fn ssh_entry(id: &str) -> HostEntry {
         HostEntry {
             id: HostId::new(id),
@@ -885,6 +986,8 @@ mod tests {
         }
     }
 
+    // A Unix socket stands in for a master (shared connections are Unix-only).
+    #[cfg(unix)]
     #[tokio::test]
     async fn an_unanswered_check_is_not_an_absent_connection() {
         let dir = std::env::temp_dir().join(format!("mrs-unanswered-{}", std::process::id()));

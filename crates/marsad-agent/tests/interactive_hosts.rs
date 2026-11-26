@@ -1034,10 +1034,9 @@ async fn removing_a_host_withdraws_its_prompt() {
     }
 }
 
-/// The one click covers the restart of a helper that runs another build: its second connect
-/// attempt rides the shared connection the first one opened, so the user is asked once, with no
-/// second prompt (a hub without a shared connection asks again, and says why: the `repeat` of the
-/// prompt, covered in `auth.rs`).
+/// The one click covers the restart of a daemon that runs another build: the restart is the
+/// bootstrap's decision on the attempt's one connection, so the user is asked once, and there is
+/// no second attempt at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_helper_restart_within_one_sign_in_rides_the_shared_connection_and_asks_nothing_more() {
     let mut r = Rig::new().await;
@@ -1083,10 +1082,12 @@ async fn a_helper_restart_within_one_sign_in_rides_the_shared_connection_and_ask
     assert_eq!(prompts.len(), 1, "{prompts:#?}");
     assert!(prompts[0]["repeat"].is_null());
     assert_eq!(r.askpass_calls(), 1, "ssh asked the helper once in all");
-    // Two attempts (the first saw the old build), one sign-in step, one shared connection.
-    assert!(evs(all, "pp", "boot.attempt").len() >= 2);
+    // One attempt, one sign-in step, one shared connection; the restart decided in it.
+    assert_eq!(evs(all, "pp", "boot.attempt").len(), 1, "{all:#?}");
     assert_eq!(evs(all, "pp", "ssh.signin_started").len(), 1, "{all:#?}");
-    assert_eq!(evs(&r.tail.seen[..m], "pp", "boot.build_mismatch").len(), 1);
+    let actions = evs(all, "pp", "boot.action");
+    assert_eq!(actions.len(), 1, "{actions:#?}");
+    assert_eq!(actions[0]["action"], "restart");
 }
 
 // ── the shared connection ────────────────────────────────────────────────────

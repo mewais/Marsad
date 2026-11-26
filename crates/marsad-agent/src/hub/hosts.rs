@@ -21,7 +21,7 @@ use super::auth::Prompts;
 use super::fleet::Fleet;
 use super::master::Masters;
 use super::provision::{Entries, Learned};
-use super::transport::{bootstrap_argv, RemoteShell};
+use super::transport::{safe_host_id, transport_prefix};
 use crate::diag::{self, emit};
 use crate::util::now_ms;
 
@@ -190,9 +190,13 @@ impl Registry {
     async fn link(&self, entry: HostEntry) -> Result<(), MarsadError> {
         let mut entry = entry;
         entry.derive_local_files();
-        let argv = bootstrap_argv(&entry, RemoteShell::for_entry(&entry)).ok_or_else(|| {
-            MarsadError::invalid("no link for this host (the local host, or an unusable id)")
-        })?;
+        // The connector builds each attempt's command itself (it depends on the route of the
+        // attempt); the spec carries the transport, for what only names the link.
+        let argv = transport_prefix(&entry.kind)
+            .filter(|_| safe_host_id(entry.id.as_str()))
+            .ok_or_else(|| {
+                MarsadError::invalid("no link for this host (the local host, or an unusable id)")
+            })?;
         self.inner
             .entries
             .write()
@@ -656,6 +660,8 @@ mod tests {
 
     struct Harness {
         registry: Registry,
+        // Read by the Unix-only tests (a Unix socket stands in for a master).
+        #[cfg_attr(not(unix), allow(dead_code))]
         masters: Masters,
         fleet: Fleet,
         store: Store,
@@ -729,6 +735,8 @@ mod tests {
         entry.id
     }
 
+    // A Unix socket stands in for a master (shared connections are Unix-only).
+    #[cfg(unix)]
     /// A control socket that accepts and drops every connection: `ssh -O exit` on it fails
     /// (the master answers nothing), so the connection is still open as far as the hub knows.
     fn wedged_master(h: &Harness, id: &HostId) -> tokio::task::JoinHandle<()> {
@@ -743,6 +751,7 @@ mod tests {
     }
 
     /// A sign-in that ended with the connection open: the master is tracked, as a real one is.
+    #[cfg(unix)]
     async fn signed_in_master(h: &Harness, id: &HostId) {
         let entry = h.registry.get(id).unwrap();
         let control = h.masters.path(&entry).unwrap();
@@ -769,6 +778,8 @@ mod tests {
             .expect("the store has the host")
     }
 
+    // A Unix socket stands in for a master (shared connections are Unix-only).
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_signout_whose_exit_failed_says_so_and_keeps_the_master_tracked() {
         let h = harness("signout-failed").await;
@@ -793,6 +804,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&h.dir);
     }
 
+    // A Unix socket stands in for a master (shared connections are Unix-only).
+    #[cfg(unix)]
     #[tokio::test]
     async fn removing_a_host_whose_exit_failed_keeps_its_master_tracked() {
         let h = harness("remove-failed").await;

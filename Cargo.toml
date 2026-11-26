@@ -46,6 +46,11 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 fastrand = "2"
 ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 
+# The helper hashes itself (and the hub what it uploads) at every connect: unoptimised SHA-256
+# would make that seconds per connect in development and test builds.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = true
 strip = true
