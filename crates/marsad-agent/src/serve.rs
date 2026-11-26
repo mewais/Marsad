@@ -871,28 +871,26 @@ pub(crate) async fn start_daemon_process(
         drop(child);
         return Ok(Started::Ready);
     }
-    // EOF without a readiness line: the daemon exited. Another instance on this machine that
-    // won the lock is fine (the caller's connect decides); anything else is reported.
-    let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
-    match status {
-        Ok(Ok(s)) if s.code() == Some(EXIT_ALREADY_RUNNING as i32) => Ok(Started::AnotherWon),
-        Ok(Ok(s)) => Err(StartFailed {
-            reason: StartFailure::ExitedBeforeReady,
-            exit: s.code(),
-            error: None,
-            cause: std::io::Error::other(format!(
-                "the daemon exited ({s}) before it was ready; see {}",
-                log_path.display()
-            )),
-        }),
-        Ok(Err(e)) => Err(StartFailed::io(StartFailure::ReadFailed, e)),
-        Err(_) => Err(StartFailed {
-            reason: StartFailure::PipeClosedStillRunning,
-            exit: None,
-            error: None,
-            cause: std::io::Error::other("the daemon closed its readiness pipe but did not exit"),
-        }),
+    // EOF without a readiness line: the daemon is on its way out. Another instance on this
+    // machine that won the lock is fine (the caller's connect decides); anything else is
+    // reported. No deadline on the exit: a slow exit (a login environment, a shutdown hook) is
+    // waited for, and dropping this future (a cancelled attempt) ends the wait.
+    let s = child
+        .wait()
+        .await
+        .map_err(|e| StartFailed::io(StartFailure::ReadFailed, e))?;
+    if s.code() == Some(EXIT_ALREADY_RUNNING as i32) {
+        return Ok(Started::AnotherWon);
     }
+    Err(StartFailed {
+        reason: StartFailure::ExitedBeforeReady,
+        exit: s.code(),
+        error: None,
+        cause: std::io::Error::other(format!(
+            "the daemon exited ({s}) before it was ready; see {}",
+            log_path.display()
+        )),
+    })
 }
 
 /// How `stop` ended, for the exit status and the record.

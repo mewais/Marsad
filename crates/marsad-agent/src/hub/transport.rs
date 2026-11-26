@@ -293,15 +293,18 @@ pub const SH_STARTER: &str = "echo MARSAD-SH; IFS= read -r l; eval \"$l\"";
 /// * a POSIX shell (sh, bash, zsh, fish, csh/tcsh) runs `exec sh -c '<SH_STARTER>'` and never
 ///   reaches the rest (it parses it: every part is valid in all of them);
 /// * cmd.exe (OpenSSH for Windows' default) has no `'` quoting and splits at `&`: `exec` is not
-///   a command, then `cmd.exe /d /s /c "<windows line>"` runs, then `rem` ends the line;
+///   a command, then `cmd.exe /d /v:on /s /c "<windows line>"` runs, then `rem` ends the line;
 /// * PowerShell (a configured default) finds neither `exec` nor `rem` (errors on stderr, it goes
-///   on) and runs `cmd.exe --% /d /s /c "<windows line>"` (`--%`: the rest is passed as is).
+///   on) and runs `cmd.exe --% /d /v:on /s /c "<windows line>"` (`--%`: the rest is passed as is).
 ///
-/// The Windows line holds no `"` or `'` ([`windows_line`]), which is what keeps it inside the
-/// quotes of all three.
+/// The Windows line holds no `'`, and its `"` come in pairs, each around one path, so the
+/// quotes balance ([`windows_line`]). cmd.exe's outer parse reads the line inside `/c "..."`
+/// toggling its quote state at each `"`: the line's own `&&` sit between the path pairs (inside
+/// the outer quotes, not split), and no path holds a special character. `/v:on` is the delayed
+/// expansion [`windows_line`] uses.
 pub fn universal_command(t: BootTarget<'_>) -> String {
     let win = windows_line(t);
-    format!("exec sh -c '{SH_STARTER}' ; rem '& cmd.exe /d /s /c \"{win}\" & rem ' ; cmd.exe --% /d /s /c \"{win}\"")
+    format!("exec sh -c '{SH_STARTER}' ; rem '& cmd.exe /d /v:on /s /c \"{win}\" & rem ' ; cmd.exe --% /d /v:on /s /c \"{win}\"")
 }
 
 /// The helper's arguments after `boot`.
@@ -322,11 +325,12 @@ fn boot_args(t: BootTarget<'_>) -> String {
 pub fn posix_script(t: BootTarget<'_>) -> String {
     let build = build_dir(t.build);
     let args = boot_args(t);
-    // `sh` runs this copy: its `$` must reach cmd.exe as it is.
-    let win = windows_line(t).replace('$', "\\$");
+    // `sh` runs this copy inside its double quotes: its `$` must reach cmd.exe as it is, and the
+    // `"` of the path quotes are escaped for it (the line's own `"` are never preceded by `\`).
+    let win = windows_line(t).replace('$', "\\$").replace('"', "\\\"");
     [
         &format!("b=\"$HOME/.marsad/bin/{build}/$(uname -s)-$(uname -m)\"; a=\"$b/marsad-agent\"; "),
-        &format!("case \"$(uname -s)\" in MINGW*|MSYS*|CYGWIN*) MSYS2_ARG_CONV_EXCL=\"*\" MSYS_NO_PATHCONV=1 exec cmd.exe /d /s /c \"{win}\";; esac; "),
+        &format!("case \"$(uname -s)\" in MINGW*|MSYS*|CYGWIN*) MSYS2_ARG_CONV_EXCL=\"*\" MSYS_NO_PATHCONV=1 exec cmd.exe /d /v:on /s /c \"{win}\";; esac; "),
         &format!("[ -x \"$a\" ] && exec \"$a\" {args}; "),
         "h=none; for t in sha256sum shasum openssl; do if command -v $t >/dev/null 2>&1; then h=$t; break; fi; done; ",
         "echo \"MARSAD-BOOT2 os=$(uname -s) arch=$(uname -m) helper_build=none daemon=unknown hasher=$h\"; ",
@@ -392,14 +396,18 @@ fn windows_boot_hash() -> String {
     format!("{h:016x}")
 }
 
-/// The Windows bootstrap, one cmd.exe command line without `"` or `'` (see
-/// [`universal_command`]): in `%LOCALAPPDATA%\Marsad\bin` (made if missing; `cd /d` takes a path
-/// with spaces unquoted), a helper of the hub's build in `<build>\Windows-<arch>\` takes over;
-/// without one, PowerShell (stdin from NUL) makes sure the boot program exists (its script
-/// from an environment variable: no quoting), the boot program installs the upload, and the new helper
-/// takes over with `--installed`. Each step runs only if the one before succeeded. The boot
-/// program's source goes in an environment variable (base64 is plain text to cmd.exe), cleared
-/// before any program that keeps running starts.
+/// The Windows bootstrap, one cmd.exe command line (see [`universal_command`] for the layers
+/// that parse it). The profile directory is never written into the line: it is the delayed
+/// expansion `!LOCALAPPDATA!`, which cmd.exe (run with `/v:on`) expands when the command runs,
+/// so a value with spaces, parentheses or `&` is one argument, not syntax. Each use is quoted;
+/// those quotes are the only `"` in the line, always in pairs around one path.
+///
+/// In `%LOCALAPPDATA%\Marsad\bin` (made if missing), a helper of the hub's build in
+/// `<build>\Windows-<arch>\` takes over; without one, PowerShell (stdin from NUL) makes sure the
+/// boot program exists (its script from an environment variable: no quoting), the boot program
+/// installs the upload, and the new helper takes over with `--installed`. Each step runs only if
+/// the one before succeeded. The boot program's source goes in an environment variable (base64
+/// is plain text to cmd.exe), cleared before any program that keeps running starts.
 pub fn windows_line(t: BootTarget<'_>) -> String {
     let hash = windows_boot_hash();
     let b64 = base64::engine::general_purpose::STANDARD;
@@ -418,7 +426,7 @@ pub fn windows_line(t: BootTarget<'_>) -> String {
     // `-EncodedCommand`'s UTF-16 size); `^(`/`^)`: parentheses inside cmd.exe's block.
     let ps = "powershell -NoProfile -NonInteractive -Command iex^([Text.Encoding]::UTF8.GetString^([Convert]::FromBase64String^($env:MARSAD_PS^)^)^) <NUL";
     format!(
-        "set MARSAD_BOOT_CS={}&& set MARSAD_PS={}&& cd /d %LOCALAPPDATA% && (if not exist Marsad\\bin mkdir Marsad\\bin) && cd Marsad\\bin && (if exist {p}\\marsad-agent.exe (set MARSAD_BOOT_CS=&& set MARSAD_PS=&& {p}\\marsad-agent.exe {args}) else ({ps} && set MARSAD_BOOT_CS=&& set MARSAD_PS=&& marsad-boot-{hash}.exe {p} && {p}\\marsad-agent.exe {args} --installed))",
+        "set MARSAD_BOOT_CS={}&& set MARSAD_PS={}&& (if not exist \"!LOCALAPPDATA!\\Marsad\\bin\" mkdir \"!LOCALAPPDATA!\\Marsad\\bin\") && cd /d \"!LOCALAPPDATA!\\Marsad\\bin\" && (if exist {p}\\marsad-agent.exe (set MARSAD_BOOT_CS=&& set MARSAD_PS=&& {p}\\marsad-agent.exe {args}) else ({ps} && set MARSAD_BOOT_CS=&& set MARSAD_PS=&& marsad-boot-{hash}.exe {p} && {p}\\marsad-agent.exe {args} --installed))",
         b64.encode(source),
         b64.encode(script.as_bytes())
     )
@@ -658,10 +666,27 @@ mod tests {
         assert!(bootstrap_argv_via(&entry(HostKind::Local), T, SshRoute::Plain).is_none());
     }
 
+    /// Whether the Windows line survives the outer parse of `cmd.exe /s /c "<line>"`, which
+    /// toggles its quote state at every `"` and splits at `&`, `|`, `<`, `>`, `(`, `)` only
+    /// outside quotes. The line starts inside the outer quotes, so the path quotes (each a pair
+    /// around one path) put the path itself outside them: a special character there would
+    /// split. The line has none, and the pairs balance, so it ends inside the outer quotes.
+    fn cmd_outer_parse_is_safe(win: &str) -> bool {
+        let mut inside_outer = true;
+        for c in win.chars() {
+            match c {
+                '"' => inside_outer = !inside_outer,
+                '&' | '|' | '<' | '>' | '(' | ')' if !inside_outer => return false,
+                _ => {}
+            }
+        }
+        inside_outer
+    }
+
     /// The one command line holds a part for every default shell, and the parts cannot break
-    /// out of each other's quoting: the Windows line has no quote of either kind and the POSIX
-    /// starter no single quote; cmd.exe parses the whole line, which must fit its limit with
-    /// the longest host id.
+    /// out of each other's quoting: the Windows line has no `'`, its `"` balance around paths
+    /// (cmd.exe's outer parse keeps every `&` in its quotes), and the POSIX starter no single
+    /// quote; cmd.exe parses the whole line, which must fit its limit with the longest host id.
     #[test]
     fn the_universal_command_fits_cmd_and_keeps_its_parts_quoted() {
         let long = "h".repeat(64);
@@ -670,13 +695,23 @@ mod tests {
             ..T
         };
         let win = windows_line(t);
-        assert!(!win.contains('"') && !win.contains('\''), "{win}");
+        assert!(!win.contains('\''), "{win}");
+        assert!(cmd_outer_parse_is_safe(&win), "{win}");
+        // The profile directory is never in the line: a delayed expansion, each use quoted, so
+        // a value with spaces, parentheses or `&` is one argument.
+        assert!(!win.contains("%LOCALAPPDATA%"), "{win}");
+        assert!(!win.replace("!LOCALAPPDATA!", "").contains('!'), "{win}");
+        assert_eq!(win.matches("!LOCALAPPDATA!").count(), 3, "{win}");
+        assert_eq!(win.matches("\"!LOCALAPPDATA!").count(), 3, "{win}");
+        assert!(!win.contains("\\\""), "{win}");
         assert!(!SH_STARTER.contains('\''));
         let line = universal_command(t);
         assert!(line.len() < CMD_MAX_LINE, "{} chars", line.len());
         assert!(line.starts_with("exec sh -c 'echo MARSAD-SH; "), "{line}");
-        assert!(line.contains(&format!("' ; rem '& cmd.exe /d /s /c \"{win}\" & rem ' ; ")));
-        assert!(line.ends_with(&format!("cmd.exe --% /d /s /c \"{win}\"")));
+        assert!(line.contains(&format!(
+            "' ; rem '& cmd.exe /d /v:on /s /c \"{win}\" & rem ' ; "
+        )));
+        assert!(line.ends_with(&format!("cmd.exe --% /d /v:on /s /c \"{win}\"")));
         // The helper of the hub's build, else the boot program and then the new helper.
         assert!(win.contains(&format!(
             "(if exist 0.2.0+abc.dirty\\Windows-%PROCESSOR_ARCHITECTURE%\\marsad-agent.exe (set MARSAD_BOOT_CS=&& set MARSAD_PS=&& 0.2.0+abc.dirty\\Windows-%PROCESSOR_ARCHITECTURE%\\marsad-agent.exe boot --host-id {long} --hub-id 0123456789abcdef) else (powershell -NoProfile "

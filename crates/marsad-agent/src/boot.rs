@@ -137,12 +137,15 @@ pub async fn boot(mut o: Options) -> ExitCode {
         None => return failed("decision", &format!("unknown decision {line:?}")),
     };
     // The daemon is ready before the connection becomes the bridge's: a running one answered
-    // above; one started here printed its readiness line (no deadline: a slow login
-    // environment is waited for).
+    // above; one started here printed its readiness line. No deadline: a slow login environment
+    // is waited for: the wait ends with the daemon's readiness line or its exit. (Closing the
+    // hub's connection does not end it: nothing reads the connection before the OK line, and
+    // the daemon is detached on purpose.) Progress goes to stderr, as `stop`'s does.
     let running = report.daemon == DaemonState::Running && stop == "none";
     let daemon = if running {
         "running"
     } else {
+        eprintln!("waiting for the daemon to be ready");
         match serve::start_daemon_process(o.raw.clone(), o.layout()).await {
             Ok(Started::Ready) => "started",
             // Another start won the lock meanwhile: it serves (the bridge connects to it).
