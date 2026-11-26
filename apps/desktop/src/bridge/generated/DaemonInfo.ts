@@ -16,6 +16,12 @@ hub_id?: string, data_dir: string, pid: number,
  */
 exe: string, 
 /**
+ * The host's stable helper pointer (`<home>/.marsad/bin/marsad-agent`), given only when it
+ * exists and resolves to `exe`. Sessions launch their MCP servers through it, so a continued
+ * session follows an upgrade; without it (Windows, an older daemon) the hub uses `exe`.
+ */
+launcher?: string, 
+/**
  * The path of the endpoint it serves (on Windows the path its named pipe derives from).
  */
 socket: string, };

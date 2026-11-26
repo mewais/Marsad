@@ -12,7 +12,14 @@ use wasit_core::{DriverCapabilities, McpTransport};
 /// The helper a WSL or SSH host's daemon runs from (its build's directory).
 const EXE: &str = "/home/u/.marsad/bin/0.2.0+abc/Linux-x86_64/marsad-agent";
 
+/// The stable helper pointer a POSIX daemon reports when it resolves to itself.
+const POINTER: &str = "/home/u/.marsad/bin/marsad-agent";
+
 fn launch(questions: bool) -> LaunchContext {
+    launch_with(questions, None)
+}
+
+fn launch_with(questions: bool, launcher: Option<&str>) -> LaunchContext {
     // The capabilities a CLI reports (the fields without a serde default are the ones given);
     // only the question capability decides the item.
     let capabilities: DriverCapabilities = serde_json::from_value(serde_json::json!({
@@ -48,6 +55,7 @@ fn launch(questions: bool) -> LaunchContext {
             data_dir: "/home/u/.marsad/machines/k".into(),
             pid: 1,
             exe: EXE.into(),
+            launcher: launcher.map(str::to_owned),
             socket: "/tmp/marsad/s.sock".into(),
         },
         capabilities,
@@ -76,5 +84,25 @@ fn a_new_session_runs_wasl_mcp_from_its_hosts_own_helper() {
 fn a_new_session_runs_ask_mcp_from_its_hosts_own_helper() {
     let (command, args) = stdio_server(AskUserMcp.items(&launch(false)));
     assert_eq!(command, EXE);
+    assert_eq!(args.first().map(String::as_str), Some("ask-mcp"));
+}
+
+#[test]
+fn a_new_session_runs_wasl_mcp_through_the_stable_pointer() {
+    let (command, args) = stdio_server(WaslMcp.items(&launch_with(true, Some(POINTER))));
+    assert_eq!(
+        command, POINTER,
+        "the spec names the pointer, not the build"
+    );
+    assert_eq!(args.first().map(String::as_str), Some("mcp"));
+}
+
+#[test]
+fn a_new_session_runs_ask_mcp_through_the_stable_pointer() {
+    let (command, args) = stdio_server(AskUserMcp.items(&launch_with(false, Some(POINTER))));
+    assert_eq!(
+        command, POINTER,
+        "the spec names the pointer, not the build"
+    );
     assert_eq!(args.first().map(String::as_str), Some("ask-mcp"));
 }

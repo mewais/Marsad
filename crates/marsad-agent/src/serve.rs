@@ -260,6 +260,7 @@ pub async fn serve(o: Options) -> ExitCode {
             );
         }
     };
+    // `launcher` is left unset here: `daemon.info` computes it per request (see `HostServices`).
     let info = DaemonInfo {
         version: version::info(),
         host_id: host_id.clone(),
@@ -268,6 +269,7 @@ pub async fn serve(o: Options) -> ExitCode {
         data_dir: layout.data.display().to_string(),
         pid: std::process::id(),
         exe: exe.display().to_string(),
+        launcher: None,
         socket: o.socket_path().display().to_string(),
     };
     let runtime = RuntimeService::new(
@@ -287,6 +289,7 @@ pub async fn serve(o: Options) -> ExitCode {
         ptys: ptys.clone(),
         execs: execs.clone(),
         info,
+        exe: exe.clone(),
         shutdown: shutdown.clone(),
     };
     let mut local = ServiceMux::new();

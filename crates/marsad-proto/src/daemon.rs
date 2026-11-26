@@ -29,6 +29,12 @@ pub struct DaemonInfo {
     pub pid: u32,
     /// The daemon's own executable (also the `shim` and `mcp` entry).
     pub exe: String,
+    /// The host's stable helper pointer (`<home>/.marsad/bin/marsad-agent`), given only when it
+    /// exists and resolves to `exe`. Sessions launch their MCP servers through it, so a continued
+    /// session follows an upgrade; without it (Windows, an older daemon) the hub uses `exe`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub launcher: Option<String>,
     /// The path of the endpoint it serves (on Windows the path its named pipe derives from).
     pub socket: String,
 }

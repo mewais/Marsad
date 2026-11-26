@@ -34,12 +34,34 @@ pub struct HostServices {
     pub discovery: Discovery,
     pub ptys: pty::Ptys,
     pub execs: exec::Execs,
+    /// The daemon's identity as it was at start. Its `launcher` is not fixed here: the pointer
+    /// can be repointed while the daemon runs, so `daemon_info` sets it per request.
     pub info: DaemonInfo,
+    /// The daemon's executable, whose stable pointer `daemon_info` checks.
+    pub exe: PathBuf,
     /// Cancelled by `daemon.shutdown`.
     pub shutdown: CancellationToken,
 }
 
 impl HostServices {
+    /// `daemon.info` as of now. The pointer (`<home>/.marsad/bin/marsad-agent`) is looked up per
+    /// request, so a repoint by another bootstrap (an upgrade or a downgrade, last writer wins)
+    /// shows here at once: the hub then launches through the pointer only while it resolves to
+    /// this build, and through `exe` otherwise. The lookup touches the filesystem, so it runs on a
+    /// blocking thread. A lookup that panics reports no pointer, which is the safe fallback to
+    /// `exe`.
+    async fn daemon_info(&self) -> DaemonInfo {
+        let exe = self.exe.clone();
+        let launcher = tokio::task::spawn_blocking(move || crate::launcher::launcher_of(&exe))
+            .await
+            .ok()
+            .flatten();
+        DaemonInfo {
+            launcher: launcher.map(|p| p.display().to_string()),
+            ..self.info.clone()
+        }
+    }
+
     /// The working directory a target names, and the session it belongs to.
     fn resolve(&self, t: &GitTarget) -> Result<(PathBuf, Option<String>), MarsadError> {
         match (&t.session, &t.cwd) {
@@ -201,7 +223,7 @@ impl Service for HostServices {
                     let r: BaseRequest = params(p).map_err(rpc_to)?;
                     ok(self.base(r).await?).map_err(rpc_to)?
                 }
-                methods::DAEMON_INFO => ok(&self.info).map_err(rpc_to)?,
+                methods::DAEMON_INFO => ok(self.daemon_info().await).map_err(rpc_to)?,
                 methods::DAEMON_SHUTDOWN => {
                     self.shutdown.cancel();
                     ok(Ack {}).map_err(rpc_to)?

@@ -67,6 +67,84 @@ async fn a_client_given_a_runtime_directory_keeps_its_daemon_there() {
     assert_eq!(again.daemon_info(None).await.unwrap().pid, info.pid);
 }
 
+/// The stable pointer is repointed while the daemon runs (another bootstrap: an upgrade or a
+/// downgrade, last writer wins). `daemon.info` follows it per request: its `launcher` names the
+/// pointer only while the pointer resolves to this daemon's build, and is absent otherwise, so the
+/// hub falls back to the daemon's `exe`. Repointing back restores it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daemon_info_follows_the_stable_pointer_as_it_is_repointed() {
+    let d = TempDir::new();
+    let home = d.path().join("home");
+    let bin = home.join(".marsad").join("bin");
+    let plat = platform_dir();
+    // Two helpers in the account's layout, each a copy of this build (a copy: a symlinked daemon
+    // would report its target as `current_exe`).
+    let helper = |build: &str| {
+        let p = bin.join(build).join(&plat).join("marsad-agent");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::copy(agent(), &p).unwrap();
+        p
+    };
+    let running = helper("0.2.0+new");
+    let other = helper("0.1.0+old");
+    let pointer = bin.join(marsad_agent::launcher::POINTER);
+    let pointer_str = pointer.display().to_string();
+    marsad_agent::launcher::publish(&running).unwrap();
+
+    let data = d.path().join("d");
+    let mut child = tokio::process::Command::new(&running)
+        .arg("serve")
+        .args(data_args(&data))
+        .args(serve_args())
+        .envs(isolated_home_env(&home))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    tokio::time::timeout(
+        T,
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line),
+    )
+    .await
+    .expect("the daemon said it is ready")
+    .unwrap();
+    assert!(line.contains("ready"), "{line}");
+
+    let c = client_of(&data);
+    let info = c.daemon_info(None).await.unwrap();
+    assert_eq!(
+        info.launcher.as_deref(),
+        Some(pointer_str.as_str()),
+        "the pointer resolves to this daemon"
+    );
+
+    marsad_agent::launcher::publish(&other).unwrap();
+    let info = c.daemon_info(None).await.unwrap();
+    assert_eq!(
+        info.launcher, None,
+        "the pointer names another build: no launcher"
+    );
+    assert_eq!(
+        info.exe,
+        running.display().to_string(),
+        "items fall back to exe"
+    );
+
+    marsad_agent::launcher::publish(&running).unwrap();
+    let info = c.daemon_info(None).await.unwrap();
+    assert_eq!(
+        info.launcher.as_deref(),
+        Some(pointer_str.as_str()),
+        "repointed back: the launcher is reported again"
+    );
+
+    end_own_daemon(child).await;
+}
+
 #[tokio::test]
 async fn readiness_single_instance_version_mcp_and_stop() {
     let d = TempDir::new();

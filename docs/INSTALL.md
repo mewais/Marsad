@@ -56,6 +56,11 @@ The `marsad-agent` command takes `--data <dir>` instead. The helper cache on thi
 `~/.marsad/bin/<os>-<arch>/marsad-agent`, where `<os>-<arch>` comes from `uname -s` and
 `uname -m`.
 
+On a POSIX host, every bootstrap also points `~/.marsad/bin/marsad-agent` at the build it
+runs (a symlink, replaced atomically). Sessions launch their MCP servers through that pointer, so a
+continued session follows a helper upgrade. Windows hosts keep the per-build path: a running `.exe`
+cannot be replaced safely, so a continued session there keeps the helper it started with.
+
 ## Diagnostics and logs
 
 Diagnostics are typed records of starts, stops, connection and session state, failures with

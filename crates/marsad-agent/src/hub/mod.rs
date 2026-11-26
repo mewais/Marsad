@@ -90,7 +90,7 @@ pub struct WaslMcp;
 impl AutomaticItems for WaslMcp {
     fn items(&self, ctx: &LaunchContext) -> Vec<AutomaticItem> {
         let cfg = wasl_mcp::mcp_server_config(
-            std::path::Path::new(&ctx.daemon.exe),
+            std::path::Path::new(ctx.daemon.launcher.as_deref().unwrap_or(&ctx.daemon.exe)),
             &["mcp".to_string()],
             std::path::Path::new(&ctx.daemon.socket),
             ctx.session.as_str(),
@@ -116,7 +116,7 @@ impl AutomaticItems for AskUserMcp {
             return Vec::new();
         }
         let cfg = crate::askmcp::mcp_server_config(
-            &ctx.daemon.exe,
+            ctx.daemon.launcher.as_deref().unwrap_or(&ctx.daemon.exe),
             &ctx.daemon.socket,
             ctx.session.as_str(),
         );

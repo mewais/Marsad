@@ -34,6 +34,7 @@ pub mod hold;
 pub mod host;
 pub mod hub;
 pub mod hub_events;
+pub mod launcher;
 pub mod migrate;
 pub mod serve;
 pub mod util;

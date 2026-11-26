@@ -19,6 +19,7 @@ use wasit_control::{ClientOptions, ControlClient, Hello};
 
 use crate::bootwire::{self, DaemonState, Decision, Report};
 use crate::cli::Options;
+use crate::launcher::{self, helper_bin};
 use crate::serve::{self, Started};
 use crate::version;
 
@@ -142,6 +143,14 @@ pub async fn boot(mut o: Options) -> ExitCode {
     // is waited for: the wait ends with the daemon's readiness line or its exit. (Closing the
     // hub's connection does not end it: nothing reads the connection before the OK line, and
     // the daemon is detached on purpose.) Progress goes to stderr, as `stop`'s does.
+    // The stable pointer names this build's helper before any daemon starts: a daemon reports
+    // the pointer only when it resolves to itself, and sessions launched from now on (and the
+    // continued ones, whose stored spec names the pointer) run this build's tool servers.
+    if let Some(exe) = exe.as_deref() {
+        if let Err(why) = launcher::publish(exe) {
+            return failed("launcher", &why);
+        }
+    }
     let running = report.daemon == DaemonState::Running && stop == "none";
     let daemon = if running {
         "running"
@@ -154,8 +163,8 @@ pub async fn boot(mut o: Options) -> ExitCode {
             Err(f) => return failed("daemon", &f.cause.to_string()),
         }
     };
-    if let Some(exe) = exe {
-        cleanup(&exe);
+    if let Some(exe) = exe.as_deref() {
+        cleanup(exe);
     }
     say(&bootwire::format(
         bootwire::OK,
@@ -168,24 +177,6 @@ pub async fn boot(mut o: Options) -> ExitCode {
     serve::bridge(o).await
 }
 
-/// The helper directories of the account: `<bin>/<build>/<os>-<arch>/<exe>`, or `None` when this
-/// executable is not in that shape (a development or test build run from elsewhere: nothing is
-/// cleaned there).
-fn helper_bin(exe: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let platform = exe.parent()?;
-    let build = platform.parent()?;
-    let bin = build.parent()?;
-    let named = |p: &Path, n: &str| p.file_name().and_then(|f| f.to_str()) == Some(n);
-    let home = bin.parent()?;
-    (named(bin, "bin") && (named(home, ".marsad") || named(home, "Marsad"))).then(|| {
-        (
-            platform.to_path_buf(),
-            build.to_path_buf(),
-            bin.to_path_buf(),
-        )
-    })
-}
-
 /// Removes what earlier bootstraps left: unfinished uploads next to this helper, the builds'
 /// directories (every one but this one) that no session record references, keeping the most
 /// recent unreferenced other (a second hub version, or a machine of a shared home still running
@@ -193,7 +184,9 @@ fn helper_bin(exe: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
 /// flat layout of builds before per-build directories, unless a session references it too. A
 /// referenced helper is never removed: a session that ended can be continued, which replays the
 /// spawn spec stored in its record, and that spec names the helper its MCP servers run from.
-/// When a record cannot be read nothing but the uploads is removed. Best effort: what cannot be
+/// The build the stable helper pointer (`bin/marsad-agent`, see [`crate::launcher`]) targets is
+/// kept, and the pointer itself is never removed. When a record cannot be read nothing but the
+/// uploads is removed. Best effort: what cannot be
 /// removed (a running program on Windows) stays for the next time; nothing waits or retries.
 fn cleanup(exe: &Path) {
     let Some((platform, build, bin)) = helper_bin(exe) else {
@@ -209,7 +202,12 @@ fn cleanup(exe: &Path) {
         return;
     };
     let referenced = match referenced_helpers(root, &bin) {
-        Ok(found) => found,
+        // The build the stable pointer targets is kept as well: sessions launched from now on
+        // run it through the pointer, whatever the records say.
+        Ok(mut found) => {
+            found.extend(launcher::pointer_build(&bin));
+            found
+        }
         Err(why) => {
             eprintln!("marsad-agent boot: helper builds kept: {why}");
             return;
@@ -219,6 +217,10 @@ fn cleanup(exe: &Path) {
     for e in std::fs::read_dir(&bin).into_iter().flatten().flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
+        // The stable pointer is not a build: it is never removed (its target is kept above).
+        if name == launcher::POINTER {
+            continue;
+        }
         let Ok(meta) = e.metadata() else { continue };
         if meta.is_dir() {
             if path != build {
@@ -501,6 +503,45 @@ mod tests {
         assert!(by_file.exists(), "referenced by a generated file");
         assert!(recent.exists(), "the most recent unreferenced other stays");
         assert!(!old.exists(), "an unreferenced older build goes");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// The pointer's target is kept although no record references it, and the pointer itself is
+    /// never removed: the current build (`cur`) keeps the pointer on `old`, the oldest build,
+    /// while `mid` (older than `recent`, the most recent other) is the one that goes.
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_keeps_the_build_the_pointer_targets() {
+        let (home, bin) = helper_home("pointer");
+        let helper = |build: &str| bin.join(build).join("Linux-x86_64").join("marsad-agent");
+        let (old, mid, recent, me) = (
+            helper("old"),
+            helper("mid"),
+            helper("recent"),
+            helper("cur"),
+        );
+        for p in [&old, &mid, &recent, &me] {
+            write_file(p, "x");
+        }
+        age(&bin.join("old"), 10);
+        age(&bin.join("mid"), 20);
+        age(&bin.join("recent"), 30);
+        age(&bin.join("cur"), 40);
+        crate::launcher::publish(&old).unwrap();
+        cleanup(&me);
+        let pointer = bin.join(crate::launcher::POINTER);
+        assert!(
+            std::fs::symlink_metadata(&pointer)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the pointer stays"
+        );
+        assert_eq!(std::fs::read_link(&pointer).unwrap(), old);
+        assert!(old.exists(), "the pointer's target is kept");
+        assert!(recent.exists(), "the most recent other stays");
+        assert!(me.exists(), "this helper stays");
+        assert!(!mid.exists(), "an unreferenced older build goes");
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
