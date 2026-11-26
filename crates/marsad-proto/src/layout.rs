@@ -4,7 +4,9 @@
 //! several machines share (NFS and similar). So:
 //!
 //! ```text
-//! <root>/bin/<os>-<arch>/marsad-agent      helper cache (shared; immutable per build+target)
+//! <root>/bin/<build>/<os>-<arch>/marsad-agent   helper cache (shared; immutable per build+target;
+//!                                               a session's MCP servers run from the helper of
+//!                                               the daemon that launched it, see boot.rs)
 //! <root>/machines/<key>/                   durable data of ONE machine:
 //!     sessions/<id>/{session.json, journal.ndjson, blobs/, attachments/, shim.log, …}
 //!     wasl/                                Wasl task journal

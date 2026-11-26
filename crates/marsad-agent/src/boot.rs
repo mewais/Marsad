@@ -8,6 +8,7 @@
 //! readiness line, however long the host's login environment takes), says `MARSAD-OK` with what
 //! it did, and then is the bridge on the same stdio. Nothing here retries or waits for a time.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -185,12 +186,15 @@ fn helper_bin(exe: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     })
 }
 
-/// Removes what earlier bootstraps left: unfinished uploads next to this helper, every build's
-/// directory but this one and the most recent other one (two builds are kept: a second hub
-/// version, or a machine of a shared home still running the previous one), the Windows boot
-/// programs (compiled again when an upload needs one) and the flat layout of builds before
-/// per-build directories. Best effort: what cannot be removed (a running program on Windows)
-/// stays for the next time; nothing waits or retries.
+/// Removes what earlier bootstraps left: unfinished uploads next to this helper, the builds'
+/// directories (every one but this one) that no session record references, keeping the most
+/// recent unreferenced other (a second hub version, or a machine of a shared home still running
+/// the previous one), the Windows boot programs (compiled again when an upload needs one) and the
+/// flat layout of builds before per-build directories, unless a session references it too. A
+/// referenced helper is never removed: a session that ended can be continued, which replays the
+/// spawn spec stored in its record, and that spec names the helper its MCP servers run from.
+/// When a record cannot be read nothing but the uploads is removed. Best effort: what cannot be
+/// removed (a running program on Windows) stays for the next time; nothing waits or retries.
 fn cleanup(exe: &Path) {
     let Some((platform, build, bin)) = helper_bin(exe) else {
         return;
@@ -201,7 +205,17 @@ fn cleanup(exe: &Path) {
             let _ = std::fs::remove_file(e.path());
         }
     }
-    let mut others: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let Some(root) = bin.parent() else {
+        return;
+    };
+    let referenced = match referenced_helpers(root, &bin) {
+        Ok(found) => found,
+        Err(why) => {
+            eprintln!("marsad-agent boot: helper builds kept: {why}");
+            return;
+        }
+    };
+    let mut others: Vec<(std::time::SystemTime, PathBuf, String)> = Vec::new();
     for e in std::fs::read_dir(&bin).into_iter().flatten().flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
@@ -209,15 +223,110 @@ fn cleanup(exe: &Path) {
         if meta.is_dir() {
             if path != build {
                 let at = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                others.push((at, path));
+                others.push((at, path, name));
             }
-        } else if name.starts_with("marsad-boot-") || name.starts_with("marsad-agent") {
+        } else if !referenced.contains(&name)
+            && (name.starts_with("marsad-boot-") || name.starts_with("marsad-agent"))
+        {
             let _ = std::fs::remove_file(&path);
         }
     }
     others.sort_by_key(|o| std::cmp::Reverse(o.0));
-    for (_, dir) in others.into_iter().skip(1) {
+    let unreferenced = others
+        .into_iter()
+        .filter(|(_, _, name)| !referenced.contains(name));
+    for (_, dir, _) in unreferenced.skip(1) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The names, directly under `bin`, of the helper directories that the session records of the
+/// data root `root` reference: every `session.json` of every machine sharing the home (and of
+/// the flat `sessions/` of earlier builds). A record's strings are searched for the helper
+/// directory's own path, so a path nested in JSON (the agent's config carried in an environment
+/// variable or an argument) is found too; the generated files are stored in the record itself.
+/// `Err` names a record that cannot be read or parsed: what it references is then unknown.
+fn referenced_helpers(root: &Path, bin: &Path) -> Result<HashSet<String>, String> {
+    let prefixes = helper_prefixes(bin);
+    let mut sessions = Vec::new();
+    for machine in list_dirs(&root.join("machines"))? {
+        sessions.extend(list_dirs(&machine.join("sessions"))?);
+    }
+    sessions.extend(list_dirs(&root.join("sessions"))?);
+    let mut found = HashSet::new();
+    for dir in sessions {
+        let path = dir.join("session.json");
+        let text = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let record: serde_json::Value =
+            serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        collect_helpers(&record, &prefixes, &mut found);
+    }
+    Ok(found)
+}
+
+/// The directories directly inside `dir` (none when it does not exist).
+fn list_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        if entry.path().is_dir() {
+            out.push(entry.path());
+        }
+    }
+    Ok(out)
+}
+
+/// What a helper path looks like inside a record: the helper directory followed by a separator.
+/// A path that a JSON string holds twice (a JSON document inside a JSON string) has its
+/// backslashes doubled, so that form is searched for too.
+fn helper_prefixes(bin: &Path) -> Vec<String> {
+    let plain = bin.to_string_lossy().into_owned();
+    let doubled = plain.replace('\\', "\\\\");
+    let mut out = vec![format!("{plain}/"), format!("{plain}\\")];
+    if doubled != plain {
+        out.push(format!("{doubled}\\\\"));
+    }
+    out
+}
+
+fn collect_helpers(value: &serde_json::Value, prefixes: &[String], found: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(text) => collect_text(text, prefixes, found),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_helpers(item, prefixes, found);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_helpers(item, prefixes, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Records the directory name that follows each helper prefix in `text`.
+fn collect_text(text: &str, prefixes: &[String], found: &mut HashSet<String>) {
+    for prefix in prefixes {
+        for (at, _) in text.match_indices(prefix.as_str()) {
+            let name: String = text[at + prefix.len()..]
+                .chars()
+                .take_while(|c| !matches!(c, '/' | '\\' | '"' | '\'') && !c.is_whitespace())
+                .collect();
+            if !name.is_empty() {
+                found.insert(name);
+            }
+        }
     }
 }
 
@@ -311,5 +420,112 @@ mod tests {
         std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
         assert!(helper_bin(&elsewhere).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Writes `path` (creating its directories) with `text`.
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// Sets a build directory's age (the keep rule orders the builds by it).
+    fn age(dir: &Path, secs: u64) {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::open(dir).unwrap().set_modified(t).unwrap();
+    }
+
+    /// The data root of a home with a bin directory, and the helper of each build name in it.
+    fn helper_home(name: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("mrs-boot-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join(".marsad");
+        let bin = home.join("bin");
+        (home, bin)
+    }
+
+    #[test]
+    fn a_build_a_session_record_references_is_kept() {
+        let (home, bin) = helper_home("refs");
+        let helper = |build: &str| bin.join(build).join("Linux-x86_64").join("marsad-agent");
+        let flat = bin.join("Linux-x86_64").join("marsad-agent");
+        let (old, by_env, by_file, recent, me) = (
+            helper("old"),
+            helper("by-env"),
+            helper("by-file"),
+            helper("recent"),
+            helper("cur"),
+        );
+        for p in [&old, &by_env, &flat, &by_file, &recent, &me] {
+            write_file(p, "x");
+        }
+        age(&bin.join("old"), 10);
+        age(&bin.join("by-env"), 20);
+        age(&bin.join("Linux-x86_64"), 30);
+        age(&bin.join("by-file"), 40);
+        age(&bin.join("recent"), 50);
+        // A record of another machine of the shared home: the agent's config nested in an
+        // environment variable (as a JSON string), a flat path in an argument, and a generated
+        // file whose contents the record holds.
+        let nested = format!(
+            "{{\"mcp\":{{\"wasl\":{{\"command\":[\"{}\",\"mcp\"]}}}}}}",
+            by_env.display()
+        );
+        let record = |machine: &str, id: &str, spec: serde_json::Value| {
+            let path = home
+                .join("machines")
+                .join(machine)
+                .join("sessions")
+                .join(id)
+                .join("session.json");
+            write_file(&path, &serde_json::json!({ "spec": spec }).to_string());
+        };
+        record(
+            "other",
+            "s1",
+            serde_json::json!({ "env": [["KILO_CONFIG_CONTENT", nested]] }),
+        );
+        record(
+            "other",
+            "s2",
+            serde_json::json!({ "extra_args": ["--mcp-config", format!("{{\"command\":\"{}\"}}", flat.display())] }),
+        );
+        record(
+            "this",
+            "s3",
+            serde_json::json!({ "files": [{ "path": "mcp.json", "contents": format!("{{\"command\":\"{}\"}}", by_file.display()) }] }),
+        );
+        cleanup(&me);
+        assert!(me.exists(), "this helper stays");
+        assert!(by_env.exists(), "referenced in a nested environment value");
+        assert!(flat.exists(), "the flat layout, referenced by an argument");
+        assert!(by_file.exists(), "referenced by a generated file");
+        assert!(recent.exists(), "the most recent unreferenced other stays");
+        assert!(!old.exists(), "an unreferenced older build goes");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unreadable_record_removes_no_build() {
+        let (home, bin) = helper_home("unreadable");
+        let helper = |build: &str| bin.join(build).join("Linux-x86_64").join("marsad-agent");
+        let (old, recent, me) = (helper("old"), helper("recent"), helper("cur"));
+        for p in [&old, &recent, &me] {
+            write_file(p, "x");
+        }
+        age(&bin.join("old"), 10);
+        age(&bin.join("recent"), 50);
+        // What the record references is unknown while it cannot be read: nothing is removed.
+        write_file(
+            &home
+                .join("machines")
+                .join("other")
+                .join("sessions")
+                .join("s1")
+                .join("session.json"),
+            "{ not json",
+        );
+        cleanup(&me);
+        assert!(old.exists() && recent.exists() && me.exists());
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 }
