@@ -270,4 +270,50 @@ describe("hosts", () => {
     const result = await within(panel).findByLabelText("Test result");
     expect(within(result).getByText(/`lister` does not answer like Claude Code/)).toBeInTheDocument();
   });
+
+  it("ask before connecting: toggling sends hosts.update, reflects from entry, and shows Waiting for you to connect when disconnected", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=hz");
+    const panel = await screen.findByRole("complementary", { name: "hetzner-ax41 details" });
+    const ask = within(panel).getByRole("checkbox", { name: /Ask me before connecting/ });
+    expect(ask).not.toBeChecked();
+    expect(panel).toHaveTextContent("Marsad won't connect this host on its own — use this for hosts whose sign-in sends a phone approval.");
+    await user.click(ask);
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "hosts.update")?.params).toMatchObject({ id: "hz", ask_before_connecting: true }));
+    await waitFor(() => expect(ask).toBeChecked());
+    // Still connected: no waiting card.
+    expect(within(panel).queryByText("Waiting for you to connect")).toBeNull();
+    // When the host isn't connected, the host card shows "Waiting for you to connect" with the Connect button.
+    act(() => backend.dropLink("hz", "connection reset by peer"));
+    const held = await within(panel).findByTestId("host-held");
+    expect(held).toHaveTextContent("Waiting for you to connect");
+    const connectBtn = within(held).getByRole("button", { name: "Connect" });
+    await user.click(connectBtn);
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "hosts.reconnect" && (r.params as { id: string }).id === "hz")).toBe(true));
+    await waitFor(() => expect(within(panel).queryByTestId("host-held")).toBeNull());
+    // Toggling off sends hosts.update with false and reflects back on the checkbox.
+    await user.click(ask);
+    await waitFor(() => {
+      const updates = backend.requests.filter((r) => r.method === "hosts.update");
+      expect(updates[updates.length - 1]?.params).toMatchObject({ id: "hz", ask_before_connecting: false });
+    });
+    await waitFor(() => expect(ask).not.toBeChecked());
+    // Local host does not show the setting.
+    cleanup();
+    await hostsPage("/hosts?h=x1");
+    const localPanel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    expect(within(localPanel).queryByRole("checkbox", { name: /Ask me before connecting/ })).toBeNull();
+  });
+
+  it("ask before connecting on a host with interactive auth shows Waiting for you to connect and Sign in button", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=gpu");
+    const panel = await screen.findByRole("complementary", { name: "gpu-box details" });
+    expect(within(await within(panel).findByTestId("host-held")).getByText("Needs you to sign in")).toBeInTheDocument();
+    await user.click(within(panel).getByRole("checkbox", { name: /Ask me before connecting/ }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "hosts.update")?.params).toMatchObject({ id: "gpu", ask_before_connecting: true }));
+    const held = await within(panel).findByTestId("host-held");
+    expect(held).toHaveTextContent("Waiting for you to connect");
+    expect(within(held).getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
 });

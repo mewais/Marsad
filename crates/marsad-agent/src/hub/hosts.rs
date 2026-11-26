@@ -21,7 +21,7 @@ use super::auth::Prompts;
 use super::fleet::Fleet;
 use super::master::Masters;
 use super::provision::{Entries, Learned};
-use super::transport::{safe_host_id, transport_prefix};
+use super::transport::safe_host_id;
 use crate::diag::{self, emit};
 use crate::util::now_ms;
 
@@ -191,12 +191,12 @@ impl Registry {
         let mut entry = entry;
         entry.derive_local_files();
         // The connector builds each attempt's command itself (it depends on the route of the
-        // attempt); the spec carries the transport, for what only names the link.
-        let argv = transport_prefix(&entry.kind)
-            .filter(|_| safe_host_id(entry.id.as_str()))
-            .ok_or_else(|| {
-                MarsadError::invalid("no link for this host (the local host, or an unusable id)")
-            })?;
+        // attempt), so the link's spec carries no argv of its own.
+        if matches!(entry.kind, HostKind::Local) || !safe_host_id(entry.id.as_str()) {
+            return Err(MarsadError::invalid(
+                "no link for this host (the local host, or an unusable id)",
+            ));
+        }
         self.inner
             .entries
             .write()
@@ -217,7 +217,7 @@ impl Registry {
             .await;
         self.inner
             .hub
-            .add_link(HostSpec::new(entry.id.clone(), argv))
+            .add_link(HostSpec::new(entry.id.clone()))
             .map_err(|e| MarsadError::invalid(e.to_string()))?;
         let Some(sup) = self.inner.hub.link(&entry.id) else {
             return Err(MarsadError::invalid("the link vanished while starting"));
@@ -287,6 +287,7 @@ impl Registry {
             platform: None,
             created_at_ms: now_ms(),
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -691,6 +692,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,

@@ -93,7 +93,10 @@ static class MarsadBoot
         catch (Exception e)
         {
             if (tmp != null) { try { File.Delete(tmp); } catch (Exception) { } }
-            Say("MARSAD-FAIL stage=install reason=" + Esc(e.Message));
+            // A directory or file the account may not write is a fact of the host, named by its
+            // type (the hub explains it); any other failure keeps its own words.
+            string reason = e is UnauthorizedAccessException ? "not_writable" : Esc(e.Message);
+            Say("MARSAD-FAIL stage=install reason=" + reason);
             byte[] b = Encoding.UTF8.GetBytes("Marsad bootstrap: " + e.Message + "\n");
             Stream err = Console.OpenStandardError();
             err.Write(b, 0, b.Length);

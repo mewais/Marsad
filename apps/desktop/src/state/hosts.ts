@@ -121,6 +121,7 @@ export interface HostView {
   link: HostLink;
   authPrompt: AuthPrompt | null;
   interactiveAuth: boolean;
+  askBeforeConnecting: boolean;
   /** Why the host's session feed is not live (last-known sessions are shown). */
   feedError: string | null;
 }
@@ -147,6 +148,7 @@ export function hostView(h: HostState, hub: HubLink, live: boolean): HostView {
     link: h.link.link === "local" ? { link: "local", hub } : { link: "remote", state: h.link.state, ...(live ? {} : { stale: true }) },
     authPrompt: h.authPrompt,
     interactiveAuth: h.entry.interactive_auth,
+    askBeforeConnecting: !!h.entry.ask_before_connecting,
     feedError: h.feedError,
   };
   cache.set(h, { hub, live, view: v });

@@ -11,10 +11,13 @@
 //! one decision ([`decide`]: run, restart, upload with SHA-256, or a refusal in words), the
 //! host's `MARSAD-OK` once its daemon is ready, then the control protocol. A restart, an id
 //! fix, an upgrade and Windows all happen on this connection: there is no second one, so a
-//! user who signs in does so once. A failed attempt is classified from ssh's exit status and
-//! stderr (wasit-control's classifier), so anything needing a human parks the link in
-//! `auth_needed`; a refusal (another hub's daemon, no checksum tool, a failed install) parks
-//! it as failed with its words.
+//! user who signs in does so once. A failed attempt is classified from its structure
+//! ([`failure_kind`]: the transport's exit status, what the user was asked, WSL's own
+//! distribution list); the words the transport wrote are shown, and read only for ssh's two
+//! fixed refusals that need a person ([`ssh_refusal`]: a changed host key, refused
+//! authentication). So anything needing a human parks the link in `auth_needed` (or as a host
+//! key problem); a refusal (another hub's daemon, no checksum tool, a failed install) parks it
+//! as failed with its words.
 //!
 //! A host that needs the user at login (a connect asked them for something other than a
 //! host-key confirmation, see [`marsad_proto::hosts::PromptKind::needs_user`]) is never tried
@@ -51,8 +54,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 use wasit_control::wire::RpcError;
 use wasit_control::{
-    classify_command_failure, Attempt, ClientOptions, CommandFailureKind, CommandSpec,
-    CommandTransport, ConnectDiag, ConnectError, ControlClient, HostSpec, LinkConnector,
+    Attempt, ChildHandle, ClientOptions, CommandFailureKind, CommandSpec, CommandTransport,
+    ConnectDiag, ConnectError, ControlClient, HostSpec, LinkConnector, TransportKind,
     CLOSED_EXIT_WAIT,
 };
 use wasit_diag::{Bytes, Code, Ident, Ms};
@@ -113,6 +116,8 @@ pub struct BootstrapConnector {
     pub entries: Entries,
     pub learned: mpsc::Sender<Learned>,
     pub prompts: Prompts,
+    /// The link command of each host's latest attempt (see [`LinkChildren`]).
+    pub links: LinkChildren,
     /// This hub's id: the daemon a bootstrap starts serves it, and a daemon serving another hub
     /// is not taken over (see [`decide`]).
     pub hub_id: String,
@@ -124,6 +129,39 @@ pub struct BootstrapConnector {
     pub socket: PathBuf,
     /// This machine's diagnostics directory (for the askpass helper).
     pub diag_dir: PathBuf,
+}
+
+/// The link command (the transport child that carries a host's bootstrap and then its protocol)
+/// of each host's latest attempt. A reconnect starts its command only once the previous one has
+/// ended: a server that allows one session at a time (`MaxSessions 1`) refuses the second while
+/// the first is open. The wait is for the child's own exit event, with no timer; the child ends
+/// when its stdio is closed (the attempt's client is gone) or its connection dies (ssh's
+/// keep-alives end that).
+#[derive(Default)]
+pub struct LinkChildren {
+    by_host: Mutex<HashMap<HostId, Arc<ChildHandle>>>,
+}
+
+impl LinkChildren {
+    /// Records `child` as `host`'s link command (the one a new attempt waits for).
+    pub fn remember(&self, host: &HostId, child: Arc<ChildHandle>) {
+        locked(&self.by_host).insert(host.clone(), child);
+    }
+
+    /// Whether `host`'s previous link command has not been waited for yet.
+    pub fn pending(&self, host: &HostId) -> bool {
+        locked(&self.by_host).contains_key(host)
+    }
+
+    /// Resolves once `host`'s previous link command has exited (at once when there is none). The
+    /// command is taken from the table when this is first polled, so a second attempt never waits
+    /// for the same exit twice.
+    pub async fn settle(&self, host: &HostId) {
+        let previous = locked(&self.by_host).remove(host);
+        if let Some(child) = previous {
+            child.wait_exit_unbounded().await;
+        }
+    }
 }
 
 fn cmd_err(
@@ -704,11 +742,7 @@ impl BootstrapConnector {
         let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
-        let mut kind = classify_command_failure(code, &stderr);
-        if signin.asked() > 0 && kind == CommandFailureKind::Other {
-            // A cancelled or timed-out prompt makes ssh give up without a recognisable message.
-            kind = CommandFailureKind::AuthNeeded;
-        }
+        let kind = failure_kind(child.transport(), code, signin, &stderr);
         let detail = if stderr.is_empty() {
             format!("{what} (exit {code:?})")
         } else {
@@ -750,16 +784,18 @@ impl BootstrapConnector {
         let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
-        let both = match (stdout.is_empty(), stderr.is_empty()) {
-            (true, _) => stderr.clone(),
-            (false, true) => stdout.to_string(),
-            (false, false) => format!("{stdout}\n{stderr}"),
+        let both = sent_words(stdout, &stderr);
+        // WSL's own conditions are asked of WSL (its distribution list); the rest of the
+        // transport is judged by its structure.
+        let listed = match &entry.kind {
+            HostKind::Wsl { .. } => Some(super::wsl::distros().await),
+            _ => None,
         };
-        let mut kind = classify_command_failure(code, &both);
-        if signin.asked() > 0 && kind == CommandFailureKind::Other {
-            // A cancelled or timed-out prompt makes ssh give up without a recognisable message.
-            kind = CommandFailureKind::AuthNeeded;
-        }
+        let mut kind = match (&entry.kind, &listed) {
+            (HostKind::Wsl { distro }, Some(list)) => wsl_failure(distro, list)
+                .unwrap_or_else(|| failure_kind(child.transport(), code, signin, &both)),
+            _ => failure_kind(child.transport(), code, signin, &both),
+        };
         if kind == CommandFailureKind::Other && !stdout.is_empty() {
             kind = CommandFailureKind::UnexpectedOutput;
         }
@@ -769,8 +805,11 @@ impl BootstrapConnector {
                     HostKind::Wsl { distro } => distro.as_str(),
                     _ => "",
                 };
-                let list = super::wsl::distros().await;
-                let names: Vec<&str> = list.distros.iter().map(|d| d.name.as_str()).collect();
+                let names: Vec<&str> = listed
+                    .iter()
+                    .flat_map(|l| l.distros.iter())
+                    .map(|d| d.name.as_str())
+                    .collect();
                 if names.is_empty() {
                     format!("WSL has no distribution named \"{distro}\", and none is installed. Install one (wsl --install), then edit this host.")
                 } else {
@@ -781,9 +820,7 @@ impl BootstrapConnector {
                 }
             }
             CommandFailureKind::WslUnavailable => format!("WSL is not ready on this PC: {both}"),
-            CommandFailureKind::PermissionDenied => format!(
-                "The host refused to run the Marsad helper (permission denied). Check that your home directory allows running programs (for example a noexec mount), then try again. ({both})"
-            ),
+            CommandFailureKind::PermissionDenied => permission_denied_detail(&both),
             CommandFailureKind::UnexpectedOutput => format!(
                 "The host printed something other than the Marsad bootstrap: {}. Make sure your shell startup files print nothing for non-interactive shells, then try again.",
                 truncate(&both, 300)
@@ -802,6 +839,174 @@ impl BootstrapConnector {
             ),
         };
         cmd_err(kind, code, detail)
+    }
+}
+
+/// The environment of an ssh command the hub runs (pure; see [`BootstrapConnector::ssh_env`]).
+pub fn ssh_environment(
+    askpass: &Path,
+    host: &HostId,
+    attempt: u64,
+    socket: &Path,
+    diag_dir: &Path,
+    display: Option<&std::ffi::OsStr>,
+) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            "SSH_ASKPASS".into(),
+            wasit_process::plain_path(askpass).display().to_string(),
+        ),
+        ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+        ("LC_ALL".into(), "C".into()),
+        (ASKPASS_HOST_ENV.into(), host.to_string()),
+        (ASKPASS_ATTEMPT_ENV.into(), attempt.to_string()),
+        (ASKPASS_SOCKET_ENV.into(), socket.display().to_string()),
+        (ASKPASS_DIAG_ENV.into(), diag_dir.display().to_string()),
+    ];
+    env.extend(display_fallback(display));
+    env
+}
+
+/// The `DISPLAY` an ssh command of the hub is given when the hub has none (U16: a forced `:0`
+/// clobbered a real display). `None` when the hub has one, empty counting as none.
+pub fn display_fallback(current: Option<&std::ffi::OsStr>) -> Option<(String, String)> {
+    match current {
+        Some(d) if !d.is_empty() => None,
+        _ => Some(("DISPLAY".into(), ":0".into())),
+    }
+}
+
+/// The kind of a transport command that failed before the protocol started, decided from its
+/// structure first, in the order the facts decide: a status that is the remote program's (see
+/// [`TransportKind::remote_status`]) proves the sign-in went through, so the failure is the
+/// remote program's own; otherwise what the sign-in asked decides; and only then the words the
+/// transport wrote, for the few refusals of ssh that need a person and print a fixed message
+/// ([`ssh_refusal`]). Anything else is `Other` (retried with backoff). `words` is the transport's
+/// stderr (and the sign-in's log): shown to the user, and read here only for those messages.
+pub fn failure_kind(
+    transport: TransportKind,
+    exit: Option<i32>,
+    signin: &SignInAttempt,
+    words: &str,
+) -> CommandFailureKind {
+    failure_kind_of(
+        transport,
+        exit,
+        Asks {
+            beyond_host_key: signin.asked_beyond_host_key(),
+            needs_user: signin.needed_user(),
+            host_key_refused: signin.host_key_refused(),
+        },
+        words,
+    )
+}
+
+/// What a sign-in asked, as far as the failure decision goes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Asks {
+    /// A prompt other than a host-key confirmation was asked ([`SignInAttempt::asked_beyond_host_key`]).
+    pub beyond_host_key: bool,
+    /// A prompt that needs the user at login was asked ([`PromptKind::needs_user`]).
+    pub needs_user: bool,
+    /// The host key was refused or left unanswered ([`SignInAttempt::host_key_refused`]). A key
+    /// the user accepted is not this: a failure after it is judged as any other.
+    pub host_key_refused: bool,
+}
+
+/// [`failure_kind`] from the facts alone (pure).
+pub fn failure_kind_of(
+    transport: TransportKind,
+    exit: Option<i32>,
+    asks: Asks,
+    words: &str,
+) -> CommandFailureKind {
+    if let Some(code) = exit.filter(|c| transport.remote_status(*c)) {
+        return match code {
+            126 => CommandFailureKind::PermissionDenied,
+            127 => CommandFailureKind::CommandNotFound,
+            _ => CommandFailureKind::HelperFailed,
+        };
+    }
+    if asks.needs_user {
+        CommandFailureKind::AuthNeeded
+    } else if asks.host_key_refused {
+        // A cancelled or timed-out host-key question makes ssh give up: that needs the user too.
+        CommandFailureKind::HostKeyUnknown
+    } else if asks.beyond_host_key {
+        // A cancelled or timed-out prompt makes ssh give up: that needs the user too.
+        CommandFailureKind::AuthNeeded
+    } else {
+        ssh_refusal(transport, exit, words).unwrap_or(CommandFailureKind::Other)
+    }
+}
+
+/// The refusals of ssh itself (status 255, nothing asked of the user) that need a person, found
+/// by ssh's own fixed messages; `None` for every other failure, which is retried with backoff
+/// (network-level failures among them).
+///
+/// WHY words, and only these two: retrying either of them is wrong. A changed host key is a
+/// possible man-in-the-middle and must be shown to the user, never retried. A refused
+/// authentication repeated on a timer can lock the account. Nothing else of ssh's can be told
+/// apart by its status, so the words are matched for exactly these, and only under `LC_ALL=C`
+/// (every hub ssh sets it, so the messages are English and stable):
+/// - `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` (the banner, OpenSSH's `sshconnect.c`,
+///   printed for a host key that differs from the one known; ssh then exits 255);
+/// - `Permission denied (` (`user@host: Permission denied (publickey,password).`, OpenSSH's
+///   `sshconnect2.c`, once every method is refused) and `Permission denied, please try again.`
+///   (a password or passphrase refused and asked again);
+/// - `Too many authentication failures` (OpenSSH's `sshconnect2.c` disconnect once the server's
+///   `MaxAuthTries` is spent): every further attempt on a timer counts against the account, so
+///   it parks like a refused authentication;
+/// - `Host key verification failed.` (OpenSSH's `sshconnect.c`, the host key declined or left
+///   unanswered, or refused by `StrictHostKeyChecking`): a host-key refusal the user must
+///   decide, so it parks as `HostKeyUnknown`. A changed key (the banner above) is checked first.
+///
+/// The words are read only to classify; they are never shown as the decision, and an unknown
+/// message from another ssh version simply falls back to `Other`. Pure.
+pub fn ssh_refusal(
+    transport: TransportKind,
+    exit: Option<i32>,
+    words: &str,
+) -> Option<CommandFailureKind> {
+    if transport != TransportKind::Ssh || exit != Some(255) {
+        return None;
+    }
+    if words.contains("REMOTE HOST IDENTIFICATION HAS CHANGED!") {
+        Some(CommandFailureKind::HostKeyChanged)
+    } else if words.contains("Host key verification failed.") {
+        Some(CommandFailureKind::HostKeyUnknown)
+    } else if words.contains("Permission denied (")
+        || words.contains("Permission denied, please try again.")
+        || words.contains("Too many authentication failures")
+    {
+        Some(CommandFailureKind::AuthNeeded)
+    } else {
+        None
+    }
+}
+
+/// What WSL says about a WSL host whose bootstrap printed nothing: no WSL, no distribution at
+/// all, or none by the host's name. `None`: WSL has the distribution, so the failure is the
+/// distribution's own (judged by [`failure_kind`]). Asked of WSL's list, not of wsl.exe's words.
+pub fn wsl_failure(
+    distro: &str,
+    list: &marsad_proto::hosts::WslDistros,
+) -> Option<CommandFailureKind> {
+    if !list.available || list.distros.is_empty() {
+        return Some(CommandFailureKind::WslUnavailable);
+    }
+    (!list.distros.iter().any(|d| d.name == distro)).then_some(CommandFailureKind::UnknownDistro)
+}
+
+/// What a host that never printed the report said, for the reason shown to the user: its stdout
+/// then its stderr tail (where the transport's own failure and a broken shell startup line
+/// land), each left out when empty. WHY both: the stderr is the evidence the user needs when
+/// the host's own status ended the attempt (`HelperFailed`), and it must never be dropped. Pure.
+pub fn sent_words(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, _) => stderr.to_owned(),
+        (false, true) => stdout.to_owned(),
+        (false, false) => format!("{stdout}\n{stderr}"),
     }
 }
 
@@ -826,6 +1031,21 @@ const HELD_NO_MASTER: &str =
 /// The user signed out of the host's shared connection.
 const SIGNED_OUT_DETAIL: &str = "you signed out of this host: connect it to sign in again";
 
+/// The host is set to be asked before it connects (G4): it waits for the user's click, whatever
+/// its connection does.
+const HELD_ASKED_DETAIL: &str =
+    "this host waits for you: it connects only when you connect it (it is set to be asked before connecting)";
+
+/// Whether an attempt the user did not ask for must not run on its own: the host is set to be
+/// asked before it connects, or it needs the user at login (learned, see
+/// [`HostEntry::interactive_auth`]). The one rule both the supervisor's question ([`hold`]) and an
+/// attempt's own check apply.
+///
+/// [`hold`]: LinkConnector::hold
+fn held_until_asked(entry: &HostEntry) -> bool {
+    entry.ask_before_connecting || entry.interactive_auth
+}
+
 /// The refusal of an attempt whose host the user signed out of, whether the sign-out came before
 /// the attempt or during its sign-in. WHY a refusal and not a `Command` AuthNeeded: the supervisor
 /// retries a refused attempt only after asking `hold`, and `hold` parks the host as `held: true`
@@ -837,8 +1057,19 @@ fn signed_out_refusal() -> ConnectError {
 }
 
 impl BootstrapConnector {
+    /// The host is held: recorded, and the words the supervisor shows.
+    fn held(&self, spec: &HostSpec, entry: &HostEntry) -> String {
+        emit(MarsadEvent::HostsHeld {
+            host: Ident::new(spec.id.as_str()),
+        });
+        self.held_detail(entry)
+    }
+
     /// Why `entry` waits for the user, in words.
     fn held_detail(&self, entry: &HostEntry) -> String {
+        if entry.ask_before_connecting {
+            return HELD_ASKED_DETAIL.to_owned();
+        }
         if !Masters::applies(entry) {
             return HELD_DETAIL.to_owned();
         }
@@ -870,28 +1101,29 @@ impl LinkConnector for BootstrapConnector {
         if self.prompts.armed(&spec.id) {
             return None;
         }
-        if Masters::applies(&entry) {
-            if self.masters.signed_out(&spec.id) {
-                // The user's own word: no look at the connection is needed.
-            } else {
-                // A path that cannot be made is the attempt's to report.
-                let control = self.masters.path(&entry).ok()?;
-                // Only an absent connection lets the host be held: an unanswered one may be open.
-                let check = self.masters.check(&entry, &control, None).await;
-                if check.may_be_open() {
-                    return None;
-                }
-                if !entry.interactive_auth {
-                    return None;
-                }
+        // Asked before connecting (G4): held whatever its connection does.
+        if entry.ask_before_connecting {
+            return Some(self.held(spec, &entry));
+        }
+        // A signed-out host is held on the user's own word: no look at the connection is needed.
+        let signed_out = Masters::applies(&entry) && self.masters.signed_out(&spec.id);
+        if Masters::applies(&entry) && !signed_out {
+            // A path that cannot be made is the attempt's to report.
+            let control = self.masters.path(&entry).ok()?;
+            // Only an absent connection lets the host be held: an unanswered one may be open.
+            if self
+                .masters
+                .check(&entry, &control, None)
+                .await
+                .may_be_open()
+            {
+                return None;
             }
-        } else if !entry.interactive_auth {
+        }
+        if !signed_out && !held_until_asked(&entry) {
             return None;
         }
-        emit(MarsadEvent::HostsHeld {
-            host: Ident::new(spec.id.as_str()),
-        });
-        Some(self.held_detail(&entry))
+        Some(self.held(spec, &entry))
     }
 
     async fn connect(
@@ -997,13 +1229,38 @@ fn refused(words: impl Into<String>) -> ConnectError {
     cmd_err(CommandFailureKind::HelperFailed, None, words)
 }
 
-/// `MARSAD-FAIL stage= reason=`, in words.
-fn host_failed(line: &Line) -> ConnectError {
-    refused(format!(
-        "the host's bootstrap failed ({}): {}",
-        line.get("stage").unwrap_or("?"),
-        line.get("reason").unwrap_or("no reason given")
-    ))
+/// The bootstraps' `reason=` for a helper directory the account cannot write (POSIX and Windows
+/// alike, checked before anything is written). A structural fact of the host, so the hub explains
+/// it with its own words ([`permission_denied_detail`]) rather than the host's text.
+pub const NOT_WRITABLE: &str = "not_writable";
+
+/// The user's message for a host that refuses to run or store the Marsad helper. The hint is
+/// written here, by the hub, for every such refusal; `evidence` is what the host showed.
+pub fn permission_denied_detail(evidence: &str) -> String {
+    format!(
+        "The host refused to run the Marsad helper (permission denied). Check that your home directory allows running programs (for example a noexec mount), then try again. ({evidence})"
+    )
+}
+
+/// `MARSAD-FAIL stage= reason=`, in words. A `not_writable` reason is the same refusal as the
+/// host refusing to run the helper: it gets the same hint.
+fn host_failed(line: &Line, exit: Option<i32>) -> ConnectError {
+    if line.get("reason") == Some(NOT_WRITABLE) {
+        return cmd_err(
+            CommandFailureKind::PermissionDenied,
+            exit,
+            permission_denied_detail("the helper directory on the host is not writable"),
+        );
+    }
+    cmd_err(
+        CommandFailureKind::HelperFailed,
+        exit,
+        format!(
+            "the host's bootstrap failed ({}): {}",
+            line.get("stage").unwrap_or("?"),
+            line.get("reason").unwrap_or("no reason given")
+        ),
+    )
 }
 
 impl BootstrapConnector {
@@ -1046,7 +1303,7 @@ impl BootstrapConnector {
                 if line.tag == bootwire::FAIL {
                     return Err(Failure {
                         stage,
-                        error: host_failed(&line),
+                        error: host_failed(&line, None),
                     });
                 }
                 Ok(line)
@@ -1132,11 +1389,17 @@ impl BootstrapConnector {
         let argv = bootstrap_argv_via(&entry, self.target(&host), route)
             .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
             .map_err(at(BootStage::Prepare))?;
+        // A reconnect waits for the previous link command of this host to end (G11).
+        if self.links.pending(&host) {
+            trail.tell("waiting for the previous connection to the host to close".to_owned());
+        }
+        self.links.settle(&host).await;
         // The transport's spawn and exit are recorded under this link and attempt.
         let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
-        cmd.env = self.askpass_env(&exe, &host, &signin);
+        cmd.env = self.ssh_env(&exe, &host, &signin);
         let (mut io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
         let child = Arc::new(child);
+        self.links.remember(&host, child.clone());
         trail.expect_report();
         let mut line = match read_boot_line(&mut io, &trail.seen, FIRST_TAGS).await {
             BootRead::Report(text) => {
@@ -1185,7 +1448,7 @@ impl BootstrapConnector {
         } else if line.tag == bootwire::FAIL {
             return Err(Failure {
                 stage: BootStage::Report,
-                error: host_failed(&line),
+                error: host_failed(&line, None),
             });
         }
         // The host answered and the sign-in worked. Whether it needs the user at login is a
@@ -1334,38 +1597,49 @@ impl BootstrapConnector {
         trail: &Trail,
         err: ConnectError,
     ) -> ConnectError {
-        match (control, err) {
-            (
-                Some((path, _)),
-                ConnectError::Command {
-                    kind: CommandFailureKind::AuthNeeded,
-                    exit_code,
-                    stderr,
-                },
-            ) => {
-                // The connection is looked at again: if it ended, why is told.
-                self.masters.check(entry, path, Some(trail.n())).await;
-                let ended = self.masters.ended_words(&entry.id).unwrap_or_else(|| {
-                    "the shared connection to this host ended before this attempt could use it"
-                        .to_owned()
-                });
-                cmd_err(
-                    CommandFailureKind::AuthNeeded,
-                    exit_code,
-                    format!("{ended}; ssh said: {stderr}"),
-                )
-            }
-            (_, err) => err,
+        // A link step rides the shared connection and can never ask. Refused by ssh itself (its
+        // own status, 255) for a host that needs the user, with no connection open: the host
+        // needs the user to open one. (Decided from the connection, not from ssh's words.)
+        let (
+            Some((path, _)),
+            ConnectError::Command {
+                exit_code: Some(255),
+                stderr,
+                ..
+            },
+        ) = (control, &err)
+        else {
+            return err;
+        };
+        if !entry.interactive_auth {
+            return err;
         }
+        // The connection is looked at again: if it ended, why is told.
+        if self
+            .masters
+            .check(entry, path, Some(trail.n()))
+            .await
+            .may_be_open()
+        {
+            return err;
+        }
+        let ended = self.masters.ended_words(&entry.id).unwrap_or_else(|| {
+            "the shared connection to this host ended before this attempt could use it".to_owned()
+        });
+        cmd_err(
+            CommandFailureKind::AuthNeeded,
+            Some(255),
+            format!("{ended}; ssh said: {stderr}"),
+        )
     }
 
     /// Sends the helper for `platform`: `UPLOAD <n> <sha256>` and its bytes, the hash taken
     /// first from the file that is sent (a file replaced meanwhile fails the host's check, and
     /// nothing is installed). Bounded by progress only: the link state shows the bytes the host
     /// has taken so far.
-    async fn upload<W: tokio::io::AsyncWrite + Unpin>(
+    async fn upload<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
         &self,
-        io: &mut W,
+        io: &mut S,
         trail: &Trail,
         platform: &HostPlatform,
         signin: &SignInAttempt,
@@ -1411,11 +1685,10 @@ impl BootstrapConnector {
                 Ok(())
             }
             Err(SendError::Local(e)) => Err(local(e)),
-            // The remote stopped reading: its exit status and stderr are the reason (a full
-            // disk, a quota, a directory it may not write), not our broken pipe.
             Err(SendError::Remote(e)) => Err(self
-                .remote_gone(
-                    BootStage::Upload,
+                .host_stopped_reading(
+                    io,
+                    trail,
                     signin,
                     child,
                     &format!(
@@ -1426,28 +1699,54 @@ impl BootstrapConnector {
                 .await),
         }
     }
+
+    /// The host stopped reading the helper. When it said why in its own report (`MARSAD-FAIL`,
+    /// e.g. `not_writable`: its bootstrap checked before it wrote), that report is the reason,
+    /// and the hub words it. Otherwise its exit status and stderr are the reason (a full disk, a
+    /// quota), not our broken pipe.
+    ///
+    /// WHY read only after the child exited: the report sits in the connection's buffer, and
+    /// the stream ends with the child. Waiting first (bounded by [`CLOSED_EXIT_WAIT`]) means no
+    /// line is awaited on a connection that is still open, so this cannot hang.
+    async fn host_stopped_reading<S: tokio::io::AsyncRead + Unpin>(
+        &self,
+        io: &mut S,
+        trail: &Trail,
+        signin: &SignInAttempt,
+        child: &wasit_control::ChildHandle,
+        what: &str,
+        e: &std::io::Error,
+    ) -> Failure {
+        if let Some(exit) = child.wait_exit(CLOSED_EXIT_WAIT).await {
+            if let BootRead::Report(text) = read_boot_line(io, &trail.seen, REPORT_TAGS).await {
+                let line = Line::parse(&text);
+                if line.tag == bootwire::FAIL {
+                    trail.seen.take();
+                    return Failure {
+                        stage: BootStage::Upload,
+                        error: host_failed(&line, exit.code),
+                    };
+                }
+            }
+        }
+        self.remote_gone(BootStage::Upload, signin, child, what, e)
+            .await
+    }
 }
 
 impl BootstrapConnector {
-    /// The environment of an ssh command that may ask the user: `SSH_ASKPASS` is this binary.
-    fn askpass_env(
-        &self,
-        exe: &Path,
-        host: &HostId,
-        signin: &SignInAttempt,
-    ) -> Vec<(String, String)> {
-        vec![
-            (
-                "SSH_ASKPASS".into(),
-                wasit_process::plain_path(exe).display().to_string(),
-            ),
-            ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
-            ("DISPLAY".into(), ":0".into()),
-            (ASKPASS_HOST_ENV.into(), host.to_string()),
-            (ASKPASS_ATTEMPT_ENV.into(), signin.tag().to_string()),
-            (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
-            (ASKPASS_DIAG_ENV.into(), self.diag_dir.display().to_string()),
-        ]
+    /// The environment of an ssh command the hub runs: `SSH_ASKPASS` is this binary (every
+    /// prompt it has comes to the user), `LC_ALL=C` (ssh's messages in English, as every ssh
+    /// command of the hub), and `DISPLAY=:0` only when the hub has no display of its own.
+    fn ssh_env(&self, exe: &Path, host: &HostId, signin: &SignInAttempt) -> Vec<(String, String)> {
+        ssh_environment(
+            exe,
+            host,
+            signin.tag(),
+            &self.socket,
+            &self.diag_dir,
+            std::env::var_os("DISPLAY").as_deref(),
+        )
     }
 
     /// What this sign-in asked decides whether the host needs the user at login: learned when it
@@ -1533,7 +1832,7 @@ impl BootstrapConnector {
                 error: signed_out_refusal(),
             });
         }
-        if !armed && entry.interactive_auth {
+        if !armed && held_until_asked(entry) {
             return Err(Failure {
                 stage: BootStage::Prepare,
                 error: cmd_err(
@@ -1561,7 +1860,7 @@ impl BootstrapConnector {
         .map_err(at(BootStage::Prepare))?;
         let cmd = SignInCommand {
             argv,
-            env: self.askpass_env(exe, host, signin),
+            env: self.ssh_env(exe, host, signin),
             link: spec.diag_link(),
             attempt: trail.n(),
         };
@@ -1587,12 +1886,8 @@ impl BootstrapConnector {
                     .copied()
                     .collect::<Vec<_>>()
                     .join("\n");
-                let mut kind = classify_command_failure(code, &text);
-                if signin.asked() > 0 && kind == CommandFailureKind::Other {
-                    // A cancelled or timed-out prompt makes ssh give up without a recognisable
-                    // message.
-                    kind = CommandFailureKind::AuthNeeded;
-                }
+                // The sign-in step is ssh with no remote command: its status is ssh's own.
+                let kind = failure_kind(TransportKind::Ssh, code, signin, &text);
                 let detail = if text.is_empty() {
                     format!("signing in to the host failed (exit {code:?})")
                 } else {
@@ -1735,9 +2030,27 @@ mod tests {
             text.trim(),
             "There is no distribution with the supplied name."
         );
+        // Judged by WSL's own list, not by the words: the distribution is not among those named.
+        let listed = |names: &[&str]| marsad_proto::hosts::WslDistros {
+            available: true,
+            distros: names
+                .iter()
+                .map(|n| marsad_proto::hosts::WslDistro {
+                    name: (*n).into(),
+                    default: false,
+                    running: false,
+                    version: None,
+                })
+                .collect(),
+            problem: None,
+        };
         assert_eq!(
-            classify_command_failure(Some(1), &text),
-            CommandFailureKind::UnknownDistro
+            wsl_failure("Ubuntu", &listed(&["Debian"])),
+            Some(CommandFailureKind::UnknownDistro)
+        );
+        assert!(
+            text.contains("no distribution"),
+            "the words are shown: {text}"
         );
     }
 
@@ -1918,6 +2231,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: true,
@@ -1930,6 +2244,7 @@ mod tests {
             entries,
             learned,
             prompts: prompts.clone(),
+            links: LinkChildren::default(),
             hub_id: "0123456789abcdef".into(),
             masters: masters.clone(),
             own: VersionInfo {
@@ -1942,7 +2257,7 @@ mod tests {
         };
         masters.mark_signed_out(&id);
         masters.prepare().await.unwrap();
-        let spec = HostSpec::new(id.clone(), ["true"]);
+        let spec = HostSpec::new(id.clone());
         let trail = Trail::new(&id, Attempt::new(1));
         let signin = prompts.begin_attempt(&id, None);
         let Err(failure) = connector
@@ -1964,5 +2279,322 @@ mod tests {
             }
             other => panic!("the signed-out refusal must be Refused, not {other:?}"),
         }
+    }
+
+    /// U5: the kind of a failed command comes from the transport's exit status and what the
+    /// sign-in asked. ssh's own failure (255) with nothing asked is `Other` (retried), unless
+    /// its fixed words say a person is needed ([`ssh_refusal`]).
+    #[test]
+    fn a_failure_is_decided_by_its_status_and_its_prompts() {
+        let nothing = Asks::default();
+        let beyond = Asks {
+            beyond_host_key: true,
+            ..Asks::default()
+        };
+        let user = Asks {
+            beyond_host_key: true,
+            needs_user: true,
+            host_key_refused: false,
+        };
+        let refused = Asks {
+            host_key_refused: true,
+            ..Asks::default()
+        };
+        let no_words = "";
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(255), nothing, no_words),
+            CommandFailureKind::Other
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(255), user, no_words),
+            CommandFailureKind::AuthNeeded
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(255), refused, no_words),
+            CommandFailureKind::HostKeyUnknown
+        );
+        // A prompt cancelled or timed out makes ssh give up by a signal or a status of its own.
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, None, beyond, no_words),
+            CommandFailureKind::AuthNeeded
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, None, nothing, no_words),
+            CommandFailureKind::Other
+        );
+        // ssh ran the remote program (its status is that program's): the sign-in went through,
+        // so the status decides, whatever was asked.
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(127), user, no_words),
+            CommandFailureKind::CommandNotFound
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(126), nothing, no_words),
+            CommandFailureKind::PermissionDenied
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(1), beyond, no_words),
+            CommandFailureKind::HelperFailed
+        );
+        // wsl.exe's and other commands' statuses are not known to be the remote program's.
+        assert_eq!(
+            failure_kind_of(TransportKind::Wsl, Some(127), nothing, no_words),
+            CommandFailureKind::Other
+        );
+        assert_eq!(
+            failure_kind_of(TransportKind::Other, Some(127), nothing, no_words),
+            CommandFailureKind::Other
+        );
+    }
+
+    /// Requirement 1 (E3): ssh's exit 255 with no prompt is retried with backoff, except the two
+    /// refusals that need a person: a changed host key and refused authentication, found by
+    /// ssh's fixed messages. Network-level failures stay retried. Red without [`ssh_refusal`].
+    #[test]
+    fn ssh_refusals_that_need_a_person_park_and_network_failures_retry() {
+        let changed = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\
+            @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n\
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\
+            Host key verification failed.\n";
+        let refused = "box: Permission denied (publickey,password).\n";
+        let retried = [
+            "ssh: Could not resolve hostname box: Name or service not known\n",
+            "ssh: connect to host box port 22: Connection refused\n",
+            "ssh: connect to host box port 22: Connection timed out\n",
+            "kex_exchange_identification: Connection closed by remote host\n",
+        ];
+        let nothing = Asks::default();
+        let ssh = |words: &str| failure_kind_of(TransportKind::Ssh, Some(255), nothing, words);
+        assert_eq!(ssh(changed), CommandFailureKind::HostKeyChanged);
+        assert_eq!(ssh(refused), CommandFailureKind::AuthNeeded);
+        assert_eq!(
+            ssh("box: Permission denied, please try again.\n"),
+            CommandFailureKind::AuthNeeded
+        );
+        // The server's attempt limit is spent: another try now only adds to the lockout.
+        assert_eq!(
+            ssh("Received disconnect from 192.0.2.7 port 22:2: Too many authentication failures\n"),
+            CommandFailureKind::AuthNeeded
+        );
+        // A declined or unanswered host key, reported by ssh's own line (no changed-key banner).
+        assert_eq!(
+            ssh("Host key verification failed.\n"),
+            CommandFailureKind::HostKeyUnknown
+        );
+        for words in retried {
+            assert_eq!(ssh(words), CommandFailureKind::Other, "{words}");
+        }
+        // The words only count for ssh's own status 255, and for ssh (not wsl.exe or others).
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(1), nothing, changed),
+            CommandFailureKind::HelperFailed,
+            "a remote status is the remote program's, whatever its words"
+        );
+        assert_eq!(ssh_refusal(TransportKind::Ssh, None, changed), None);
+        assert_eq!(ssh_refusal(TransportKind::Wsl, Some(255), refused), None);
+        // A changed key outranks a refusal in the same output.
+        assert_eq!(
+            ssh(&format!("{changed}{refused}")),
+            CommandFailureKind::HostKeyChanged
+        );
+    }
+
+    /// A host that cannot store the helper says so with a structural reason; the hub words the
+    /// refusal itself, with the same hint as a host that refuses to run it. Any other reason
+    /// keeps the host's own message. Red without the `not_writable` mapping in [`host_failed`].
+    #[test]
+    fn a_helper_directory_that_is_not_writable_gets_the_hub_hint() {
+        let not_writable = host_failed(
+            &Line::parse("MARSAD-FAIL stage=install reason=not_writable"),
+            Some(70),
+        );
+        assert_eq!(kind(&not_writable), CommandFailureKind::PermissionDenied);
+        let ConnectError::Command { stderr, .. } = &not_writable else {
+            unreachable!("checked by kind above")
+        };
+        assert!(
+            stderr.contains("Check that your home directory allows running programs"),
+            "{stderr}"
+        );
+        assert_eq!(
+            stderr,
+            &permission_denied_detail("the helper directory on the host is not writable")
+        );
+        let other = host_failed(
+            &Line::parse("MARSAD-FAIL stage=install reason=checksum%20mismatch"),
+            None,
+        );
+        assert_eq!(kind(&other), CommandFailureKind::HelperFailed);
+    }
+
+    /// Requirement 2 (E3): a host key the user accepted and a later failure is not a host-key
+    /// refusal; only a declined or unanswered host-key question parks as one. Red without
+    /// `host_key_refused` taking the accepted answer into account.
+    #[test]
+    fn a_host_key_the_user_accepted_is_not_refused_by_a_later_failure() {
+        let accepted_then_network = Asks {
+            host_key_refused: false,
+            ..Asks::default()
+        };
+        assert_eq!(
+            failure_kind_of(
+                TransportKind::Ssh,
+                Some(255),
+                accepted_then_network,
+                "ssh: connect to host box port 22: Connection refused\n"
+            ),
+            CommandFailureKind::Other,
+            "an accepted key then a network failure is retried, not parked as a host key"
+        );
+        let declined = Asks {
+            host_key_refused: true,
+            ..Asks::default()
+        };
+        assert_eq!(
+            failure_kind_of(TransportKind::Ssh, Some(255), declined, ""),
+            CommandFailureKind::HostKeyUnknown
+        );
+    }
+
+    /// Requirement 3 (E3): what a host sent before its report is the reason shown when its own
+    /// status ended the attempt, so its stderr tail (the broken startup line) is always in it.
+    #[test]
+    fn what_a_host_sent_without_a_report_keeps_its_stderr_tail() {
+        let rc = "bash: /home/u/.bashrc: line 3: syntax error near unexpected token `fi'";
+        assert_eq!(sent_words("", rc), rc);
+        assert_eq!(sent_words("banner", rc), format!("banner\n{rc}"));
+        assert_eq!(sent_words("banner", ""), "banner");
+        assert_eq!(sent_words("", ""), "");
+    }
+
+    /// U16: the hub gives its ssh commands `DISPLAY=:0` only when it has no display (a forced
+    /// value clobbered a real one); `LC_ALL=C` always (ssh's messages in English).
+    #[test]
+    fn the_ssh_environment_keeps_the_hubs_display_and_asks_for_english() {
+        use std::ffi::OsStr;
+        let get = |env: &[(String, String)], k: &str| {
+            env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+        };
+        let make = |display: Option<&OsStr>| {
+            ssh_environment(
+                Path::new("/bin/marsad-agent"),
+                &HostId::new("h"),
+                7,
+                Path::new("/run/s"),
+                Path::new("/run/d"),
+                display,
+            )
+        };
+        let none = make(None);
+        assert_eq!(get(&none, "DISPLAY").as_deref(), Some(":0"));
+        assert_eq!(get(&none, "LC_ALL").as_deref(), Some("C"));
+        assert_eq!(get(&none, "SSH_ASKPASS_REQUIRE").as_deref(), Some("force"));
+        assert_eq!(get(&none, ASKPASS_ATTEMPT_ENV).as_deref(), Some("7"));
+        let set = make(Some(OsStr::new(":1")));
+        assert_eq!(get(&set, "DISPLAY"), None, "the hub's own display is kept");
+        assert_eq!(get(&set, "LC_ALL").as_deref(), Some("C"));
+        assert_eq!(
+            display_fallback(Some(OsStr::new(""))),
+            Some(("DISPLAY".into(), ":0".into())),
+            "an empty display is none"
+        );
+    }
+
+    /// G11: a host's next link command waits, by its own exit event, for the previous one to end
+    /// (a server with one session at a time refuses the second while the first is open). While
+    /// the previous command's stdin is open it cannot end, so the wait is pending.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_reconnect_waits_for_the_previous_link_command_to_end() {
+        use std::future::Future;
+        use std::task::Poll;
+        let links = LinkChildren::default();
+        let host = HostId::new("h");
+        let spec = CommandSpec::new(["sh", "-c", "read line"]);
+        let (io, child) = CommandTransport::spawn(&spec).expect("sh starts");
+        let child = Arc::new(child);
+        links.remember(&host, child.clone());
+        assert!(links.pending(&host));
+        let mut settle = Box::pin(links.settle(&host));
+        let still_pending =
+            std::future::poll_fn(|cx| Poll::Ready(settle.as_mut().poll(cx).is_pending())).await;
+        assert!(
+            still_pending,
+            "the next attempt must not start while the previous command runs"
+        );
+        // Closing its stdin ends `read`, and with it the command.
+        drop(io);
+        settle.await;
+        assert!(
+            child.exit().is_some(),
+            "the wait ended with the command's exit"
+        );
+        assert!(
+            !links.pending(&host),
+            "the previous command is waited for once"
+        );
+    }
+
+    /// The connector of the tests: `entry` is its only host.
+    fn connector_for(entry: HostEntry, dir: &Path) -> (BootstrapConnector, Prompts) {
+        let id = entry.id.clone();
+        let entries: Entries = Arc::new(RwLock::new(HashMap::from([(id, entry)])));
+        let (learned, _rx) = mpsc::channel(8);
+        let prompts = Prompts::new(crate::hub::fleet::Fleet::spawn(), Duration::from_secs(5));
+        let connector = BootstrapConnector {
+            entries,
+            learned,
+            prompts: prompts.clone(),
+            links: LinkChildren::default(),
+            hub_id: "0123456789abcdef".into(),
+            masters: Masters::new(dir.join("ssh")),
+            own: VersionInfo {
+                build: "test".into(),
+                target: "test".into(),
+            },
+            bin_dir: None,
+            socket: dir.join("hub.sock"),
+            diag_dir: dir.join("diag"),
+        };
+        (connector, prompts)
+    }
+
+    /// G4: a host set to be asked before it connects is held whatever its connection does, until
+    /// the user connects it (the click arms the next attempt); a host not so set is not held by
+    /// that rule (here a WSL host: no shared connection, nothing learned that needs the user).
+    #[tokio::test]
+    async fn a_host_asked_before_connecting_is_held_until_the_user_connects_it() {
+        let dir = std::env::temp_dir().join(format!("mrs-ask-first-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut entry = HostEntry {
+            id: HostId::new("asked"),
+            name: "asked".into(),
+            kind: HostKind::Wsl {
+                distro: "Ubuntu".into(),
+            },
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            ask_before_connecting: true,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        };
+        let spec = HostSpec::new(entry.id.clone());
+        let (connector, prompts) = connector_for(entry.clone(), &dir);
+        let held = connector.hold(&spec).await;
+        assert_eq!(held.as_deref(), Some(HELD_ASKED_DETAIL), "held: {held:?}");
+        prompts.arm(&entry.id);
+        assert_eq!(
+            connector.hold(&spec).await,
+            None,
+            "the click lets the attempt run"
+        );
+        // Not set: an attempt is not held by this rule.
+        entry.ask_before_connecting = false;
+        let (plain, _) = connector_for(entry, &dir);
+        assert_eq!(plain.hold(&spec).await, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -39,10 +39,6 @@ use wasit_runtime::wire::{
 
 use crate::diag::{self, emit};
 
-/// Applying runs the setup commands (their own deadline is 30 s on the host).
-const APPLY_DEADLINE: Duration = Duration::from_secs(60);
-/// A test also waits for discovery (Wasit bounds it at 50 s after the setup).
-const TEST_DEADLINE: Duration = Duration::from_secs(110);
 /// Reading the host's report.
 const REPORT_DEADLINE: Duration = Duration::from_secs(15);
 /// How long a request waits for the hub's loopback link (in-process; connects at once).
@@ -133,21 +129,24 @@ impl HostEnvs {
         m.entry(host.clone()).or_default().clone()
     }
 
+    /// One request to `host`. `deadline` is the caller's own bound, `None` for work whose length
+    /// the host cannot bound (a setup runs as long as the user's shell and tools take): only the
+    /// loss of the link or the caller ends such a wait. No hub constant stands in for the host's
+    /// own limits, which are the host's to enforce.
     async fn call<P: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         host: &HostId,
         method: &str,
         params: P,
-        deadline: Duration,
+        deadline: Option<Duration>,
     ) -> Result<R, MarsadError> {
+        let opts = match deadline {
+            Some(d) => RequestOpts::new(d),
+            None => RequestOpts::unbounded(),
+        };
         self.inner
             .link
-            .request(
-                method,
-                params,
-                RequestOpts::new(deadline).host(host.clone()),
-                WAIT_CONNECTED,
-            )
+            .request(method, params, opts.host(host.clone()), WAIT_CONNECTED)
             .await
             .map_err(|e| upstream(host, method, e))
     }
@@ -237,7 +236,7 @@ impl HostEnvs {
         };
         let revision = Some(r.revision.clone());
         let current: Option<HostEnvironment> = match self
-            .call(host, rt::HOST_ENVIRONMENT, (), REPORT_DEADLINE)
+            .call(host, rt::HOST_ENVIRONMENT, (), Some(REPORT_DEADLINE))
             .await
         {
             Ok(c) => c,
@@ -247,7 +246,7 @@ impl HostEnvs {
             return (revision, Ok((env, ApplyOutcome::Noop)));
         }
         let applied = self
-            .call(host, rt::HOST_ENVIRONMENT_CONFIGURE, &r, APPLY_DEADLINE)
+            .call(host, rt::HOST_ENVIRONMENT_CONFIGURE, &r, None)
             .await
             .map(|env| (env, ApplyOutcome::Applied));
         (revision, applied)
@@ -266,9 +265,8 @@ impl HostEnvs {
                 return Err(e);
             }
         };
-        let test: Result<EnvironmentTest, MarsadError> = self
-            .call(host, rt::HOST_ENVIRONMENT_TEST, &r, TEST_DEADLINE)
-            .await;
+        let test: Result<EnvironmentTest, MarsadError> =
+            self.call(host, rt::HOST_ENVIRONMENT_TEST, &r, None).await;
         let shown = test
             .as_ref()
             .map(|t| (t.environment.clone(), ApplyOutcome::Applied))

@@ -744,6 +744,7 @@ impl BootSession {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -892,31 +893,25 @@ async fn the_bootstrap_installs_only_a_complete_upload_with_the_announced_hash()
     assert_eq!(left(), [std::ffi::OsString::from("marsad-agent")]);
 }
 
-/// A host without any SHA-256 tool says so in its report (`hasher=none`), and an upload sent
-/// anyway is refused: nothing unchecked is ever installed. Run with `sh` here (the same script),
-/// with a `PATH` holding only the other tools it uses.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_a_checksum_tool_nothing_is_installed() {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-    let d = TempDir::new();
-    let home = d.path().join("home");
-    let tools = d.path().join("tools");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&tools).unwrap();
-    for t in ["uname", "head", "wc", "tr", "mkdir", "chmod", "mv", "rm"] {
-        let real = ["/usr/bin", "/bin"]
-            .iter()
-            .map(|d| Path::new(d).join(t))
-            .find(|p| p.is_file())
-            .unwrap();
-        std::os::unix::fs::symlink(real, tools.join(t)).unwrap();
-    }
+/// Runs the POSIX bootstrap with `sh` (the same script the host gets) under `home` and a `PATH`
+/// holding only `tools`, and returns the child with its stdin and its stdout (the report read
+/// first, so the caller can send the upload). Nothing outside `home` is touched.
+async fn start_posix_bootstrap(
+    home: &Path,
+    tools: &Path,
+) -> (
+    tokio::process::Child,
+    tokio::process::ChildStdin,
+    tokio::io::BufReader<tokio::process::ChildStdout>,
+    String,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     let script = marsad_agent::hub::transport::posix_script(boot_target("t", "0123456789abcdef"));
     let mut child = tokio::process::Command::new("/bin/sh")
         .args(["-c", marsad_agent::hub::transport::SH_STARTER])
         .env_clear()
-        .env("HOME", &home)
-        .env("PATH", &tools)
+        .env("HOME", home)
+        .env("PATH", tools)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -934,7 +929,42 @@ async fn without_a_checksum_tool_nothing_is_installed() {
         .unwrap();
     l.clear();
     out.read_line(&mut l).await.unwrap();
-    assert!(l.trim_end().ends_with(" hasher=none"), "{l}");
+    (child, stdin, out, l.trim_end().to_owned())
+}
+
+/// The tools the bootstrap runs, as links into the system's directories, in a fresh `tools`
+/// folder under `d`. `sha256sum` is among them unless `checksum` is false.
+fn bootstrap_tools(d: &Path, checksum: bool) -> std::path::PathBuf {
+    let tools = d.join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let mut names = vec!["uname", "head", "wc", "tr", "mkdir", "chmod", "mv", "rm"];
+    if checksum {
+        names.push("sha256sum");
+    }
+    for t in names {
+        let real = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| Path::new(d).join(t))
+            .find(|p| p.is_file())
+            .unwrap();
+        std::os::unix::fs::symlink(real, tools.join(t)).unwrap();
+    }
+    tools
+}
+
+/// A host without any SHA-256 tool says so in its report (`hasher=none`), and an upload sent
+/// anyway is refused: nothing unchecked is ever installed. Run with `sh` here (the same script),
+/// with a `PATH` holding only the other tools it uses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_checksum_tool_nothing_is_installed() {
+    use tokio::io::AsyncReadExt;
+    let d = TempDir::new();
+    let home = d.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let tools = bootstrap_tools(d.path(), false);
+    let (mut child, mut stdin, mut out, report) = start_posix_bootstrap(&home, &tools).await;
+    assert!(report.ends_with(" hasher=none"), "{report}");
+    use tokio::io::AsyncWriteExt;
     stdin.write_all(b"UPLOAD 3 abc\nxyz").await.unwrap();
     drop(stdin);
     let mut rest = String::new();
@@ -945,6 +975,36 @@ async fn without_a_checksum_tool_nothing_is_installed() {
     );
     assert_eq!(child.wait().await.unwrap().code(), Some(70));
     assert!(!home.join(".marsad").exists(), "nothing was written");
+}
+
+/// A helper directory the account cannot write is refused before anything is written, with the
+/// structural reason `not_writable` (the hub words it, so the host's text is not needed). The
+/// directory is made read-only under a temporary home, so the check is the account's own
+/// permission (a root account can write anywhere and would not see this refusal).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_helper_directory_the_account_cannot_write_is_reported_as_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let d = TempDir::new();
+    let home = d.path().join("home");
+    let locked = home.join(".marsad");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let tools = bootstrap_tools(d.path(), true);
+    let (mut child, mut stdin, mut out, report) = start_posix_bootstrap(&home, &tools).await;
+    assert!(report.contains(" hasher=sha256sum"), "{report}");
+    stdin.write_all(b"UPLOAD 3 abc\nxyz").await.unwrap();
+    drop(stdin);
+    let mut rest = String::new();
+    out.read_to_string(&mut rest).await.unwrap();
+    assert_eq!(rest.trim(), "MARSAD-FAIL stage=install reason=not_writable");
+    assert_eq!(child.wait().await.unwrap().code(), Some(70));
+    assert_eq!(
+        std::fs::read_dir(&locked).unwrap().count(),
+        0,
+        "nothing was written"
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// The daemon is ready before the connection becomes the bridge's: when the helper answers
@@ -1091,6 +1151,7 @@ async fn a_link_step_without_a_connection_connects_a_key_and_never_asks_for_a_pa
                 platform: None,
                 created_at_ms: 0,
                 interactive_auth: false,
+                ask_before_connecting: false,
                 local_files: false,
                 shared_connection: true,
                 signed_out: false,

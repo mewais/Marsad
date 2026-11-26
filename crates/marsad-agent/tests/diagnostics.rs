@@ -1496,7 +1496,9 @@ mod connect {
         // (Before the shared connection this failed at `report`, the one command's first step;
         // now it is the sign-in step that cannot reach the host.)
         assert_eq!(failed["stage"], "sign_in");
-        assert_eq!(failed["kind"], "unreachable");
+        // A network-level failure is `other` (retried with backoff, as before): ssh's own
+        // refusals that need a person are the only words decided on (see `failure_kind`).
+        assert_eq!(failed["kind"], "other");
         assert!(failed["stderr"]
             .as_str()
             .unwrap()
@@ -1608,8 +1610,15 @@ mod connect {
             .await
             .unwrap();
         let (reason, problem) = parked(&mut fleet, "ro").await;
+        // The host's report says the helper directory is not writable (`reason=not_writable`), a
+        // structural fact: the hub words the refusal itself, with the hint, and the link parks
+        // as a configuration problem. The remote's words are not the reason.
         assert_eq!(problem, Some(CommandFailureKind::PermissionDenied));
-        assert!(reason.contains("Permission denied"), "{reason}");
+        assert!(
+            reason.contains("Check that your home directory allows running programs"),
+            "{reason}"
+        );
+        assert!(!reason.contains("marsad bootstrap:"), "{reason}");
         assert!(!reason.contains("Broken pipe"), "{reason}");
         drop(fleet);
         let hub = hub_records(c, &data).await;
@@ -1631,7 +1640,7 @@ mod connect {
             failed["stderr"]
                 .as_str()
                 .unwrap()
-                .contains("Permission denied"),
+                .contains("Check that your home directory allows running programs"),
             "{failed}"
         );
         assert!(!sshd.installed_agent().exists());
@@ -2605,6 +2614,7 @@ async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
                 platform: None,
                 created_at_ms: 0,
                 interactive_auth: false,
+                ask_before_connecting: false,
                 local_files: false,
                 shared_connection: false,
                 signed_out: false,

@@ -42,4 +42,10 @@ signed_out: boolean,
  * Key of the machine the host's daemon runs on (from its hello; the hub's own for the
  * local host). Two hosts with the same key are the same machine.
  */
-machine?: string | null, };
+machine?: string | null, 
+/**
+ * The user wants to be asked before this host connects: the hub never connects it on its own
+ * (after a start, a drop or a route change), the host is held in `held` until the user
+ * connects it (`hosts.reconnect`). Set by the user (`hosts.update`); `false` by default.
+ */
+ask_before_connecting: boolean, };

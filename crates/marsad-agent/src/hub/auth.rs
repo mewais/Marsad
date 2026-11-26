@@ -52,8 +52,12 @@ struct Pending {
 
 /// One prompt asked in an attempt.
 struct Asked {
+    id: u64,
     kind: PromptKind,
     text: String,
+    /// For a host-key confirmation: the user answered it so that ssh trusts the key (see
+    /// [`PromptKind::accepts_host_key`]). Set once the answer comes; never for other prompts.
+    accepted: bool,
 }
 
 /// Everything about one host's prompts: its current connect attempt, the prompt waiting for the
@@ -239,8 +243,10 @@ impl Prompts {
             }
             let kind = PromptKind::guess(&text);
             h.asked.push(Asked {
+                id,
                 kind,
                 text: text.clone(),
+                accepted: false,
             });
             let again = h.asked[h.round..].iter().filter(|a| a.text == text).count() as u32;
             if kind.needs_user() {
@@ -297,6 +303,9 @@ impl Prompts {
         self.fleet.end_prompt(host.clone(), id).await;
         match r {
             Ok(Ok(Resolution::Answer(answer))) => {
+                // Recorded before the answer goes to ssh's helper, so an attempt that fails
+                // afterwards already knows whether the host key was accepted.
+                self.record_answer(&host, attempt, id, &answer);
                 waiting.end(Ending::Answered);
                 Ok(answer)
             }
@@ -314,6 +323,18 @@ impl Prompts {
                 Err(MarsadError::Timeout {
                     what: format!("sign-in prompt for {host}"),
                 })
+            }
+        }
+    }
+
+    /// Records whether the answer to prompt `id` of `attempt` accepted a host key (see
+    /// [`PromptKind::accepts_host_key`]). The answer itself is not kept.
+    fn record_answer(&self, host: &HostId, attempt: u64, id: u64, answer: &str) {
+        let mut s = lock(&self.state);
+        if let Some(h) = s.hosts.get_mut(host).filter(|h| h.attempt == attempt) {
+            if let Some(a) = h.asked.iter_mut().find(|a| a.id == id) {
+                a.accepted =
+                    a.kind == PromptKind::Confirm && PromptKind::accepts_host_key(&a.text, answer);
             }
         }
     }
@@ -393,12 +414,35 @@ impl SignInAttempt {
         self.with(|h| h.asked.len() as u32).unwrap_or(0)
     }
 
+    /// Whether the attempt asked the user something other than a host-key confirmation (see
+    /// [`PromptKind::Confirm`]): a password, a code, a question of a site. Whatever the answer
+    /// to a host-key question was, such a prompt is the user's to answer.
+    pub fn asked_beyond_host_key(&self) -> bool {
+        self.with(|h| h.asked.iter().any(|a| a.kind != PromptKind::Confirm))
+            .unwrap_or(false)
+    }
+
     /// Whether the attempt asked the user for something at login: any prompt for which
     /// [`PromptKind::needs_user`] holds. The one place the question "does this host need the
     /// user?" is answered from what happened.
     pub fn needed_user(&self) -> bool {
         self.with(|h| h.asked.iter().any(|a| a.kind.needs_user()))
             .unwrap_or(false)
+    }
+
+    /// Whether the host key was refused or left unanswered: the attempt's last host-key
+    /// confirmation was not accepted (declined, cancelled, timed out, or an answer ssh did not
+    /// take). An accepted key, or none asked, is not refused. The last question decides: ssh
+    /// asks again after an answer it does not take, and the user may answer that one.
+    pub fn host_key_refused(&self) -> bool {
+        self.with(|h| {
+            h.asked
+                .iter()
+                .rev()
+                .find(|a| a.kind == PromptKind::Confirm)
+                .is_some_and(|a| !a.accepted)
+        })
+        .unwrap_or(false)
     }
 
     /// The attempt makes another connection within the same sign-in (the host turned out to
@@ -506,6 +550,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -672,6 +717,56 @@ mod tests {
         prompts.answer(&host, shown.id, "pw".into()).unwrap();
         asking.await.unwrap().unwrap();
         assert_eq!((a.asked(), a.needed_user()), (2, true));
+    }
+
+    /// Requirement 2 (E3): whether the host key was refused is the last host-key question's
+    /// answer, as the attempt gave it: declined, unanswered or not taken by ssh is refused; `yes`
+    /// or the printed fingerprint is accepted. Red without the accepted answer being recorded.
+    #[tokio::test]
+    async fn the_last_host_key_answer_decides_whether_the_key_was_refused() {
+        let (prompts, fleet, host) = setup("h").await;
+        let a = prompts.begin_attempt(&host, None);
+        let confirm = "The authenticity of host 'x' can't be established.\nED25519 key fingerprint is SHA256:abc.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ";
+        assert!(!a.host_key_refused(), "no question asked: nothing refused");
+        // Declined: refused.
+        let (p, h, t) = (prompts.clone(), host.clone(), a.tag());
+        let asking = tokio::spawn(async move { p.ask(h, t, confirm.into()).await });
+        let shown = until_showing(&fleet, &host, Option::is_some).await.unwrap();
+        prompts.answer(&host, shown.id, "no".into()).unwrap();
+        asking.await.unwrap().unwrap();
+        assert!(a.host_key_refused());
+        // ssh asks again; the user types the fingerprint: accepted.
+        let (p, h, t) = (prompts.clone(), host.clone(), a.tag());
+        let asking = tokio::spawn(async move { p.ask(h, t, confirm.into()).await });
+        let shown = until_showing(&fleet, &host, Option::is_some).await.unwrap();
+        prompts
+            .answer(&host, shown.id, "SHA256:abc".into())
+            .unwrap();
+        asking.await.unwrap().unwrap();
+        assert!(!a.host_key_refused(), "the last answer accepted the key");
+        assert!(
+            !a.asked_beyond_host_key(),
+            "a host-key question is not a prompt for the user at login"
+        );
+        // Unanswered (cancelled) on a later question: refused again.
+        let (p, h, t) = (prompts.clone(), host.clone(), a.tag());
+        let asking = tokio::spawn(async move { p.ask(h, t, confirm.into()).await });
+        let shown = until_showing(&fleet, &host, Option::is_some).await.unwrap();
+        prompts.cancel(&host, shown.id).unwrap();
+        assert!(asking.await.unwrap().is_err());
+        assert!(a.host_key_refused());
+        // A password asked on a new attempt is the user's, whatever the key said before.
+        let b = prompts.begin_attempt(&host, None);
+        let (p, h, t) = (prompts.clone(), host.clone(), b.tag());
+        let asking = tokio::spawn(async move { p.ask(h, t, "password:".into()).await });
+        let shown = until_showing(&fleet, &host, Option::is_some).await.unwrap();
+        prompts.answer(&host, shown.id, "pw".into()).unwrap();
+        asking.await.unwrap().unwrap();
+        assert!(b.asked_beyond_host_key());
+        assert!(
+            !b.host_key_refused(),
+            "no host-key question on this attempt"
+        );
     }
 
     #[tokio::test]

@@ -147,14 +147,14 @@ export interface FixtureHost {
 const t0 = Date.UTC(2026, 9, 1);
 const linux = { os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu" };
 export const FIXTURE_HOSTS: FixtureHost[] = [
-  { entry: { id: "x1", name: "thinkpad-x1", kind: { kind: "local" }, platform: linux, created_at_ms: t0, interactive_auth: false, local_files: true, shared_connection: false, signed_out: false }, link: null, drivers: { claude: "2.1.4", codex: "0.58.0", opencode: "1.3.2" } },
-  { entry: { id: "hz", name: "hetzner-ax41", kind: { kind: "ssh", target: "dev@95.217.40.12", port: 22, identity_file: "~/.ssh/id_ed25519" }, platform: linux, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false },
+  { entry: { id: "x1", name: "thinkpad-x1", kind: { kind: "local" }, platform: linux, created_at_ms: t0, interactive_auth: false, local_files: true, shared_connection: false, signed_out: false, ask_before_connecting: false }, link: null, drivers: { claude: "2.1.4", codex: "0.58.0", opencode: "1.3.2" } },
+  { entry: { id: "hz", name: "hetzner-ax41", kind: { kind: "ssh", target: "dev@95.217.40.12", port: 22, identity_file: "~/.ssh/id_ed25519" }, platform: linux, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false, ask_before_connecting: false },
     link: { state: "connected", hello: { protocol: { major: 1, minor: 0 }, build: "fixture", host_id: "hz", role: "daemon", features: [] } }, drivers: { claude: "2.1.4", codex: "0.58.0", opencode: "1.3.2" } },
-  { entry: { id: "win", name: "win-build", kind: { kind: "ssh", target: "build@win-build.lan", port: 22 }, platform: { os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc" }, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false },
+  { entry: { id: "win", name: "win-build", kind: { kind: "ssh", target: "build@win-build.lan", port: 22 }, platform: { os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc" }, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false, ask_before_connecting: false },
     link: { state: "reconnecting", attempt: 3, next_at: { secs_since_epoch: 0, nanos_since_epoch: 0 }, last_error: "connection reset by peer" }, drivers: { claude: "2.1.2", kilo: "7.8.27" } },
-  { entry: { id: "gpu", name: "gpu-box", kind: { kind: "ssh", target: "ml@10.0.4.21", port: 22 }, platform: linux, created_at_ms: t0, interactive_auth: true, local_files: false, shared_connection: true, signed_out: false },
+  { entry: { id: "gpu", name: "gpu-box", kind: { kind: "ssh", target: "ml@10.0.4.21", port: 22 }, platform: linux, created_at_ms: t0, interactive_auth: true, local_files: false, shared_connection: true, signed_out: false, ask_before_connecting: false },
     link: { state: "auth_needed", problem: "auth_needed", detail: "this host signs in interactively: connect to sign in", held: true }, drivers: { claude: "2.0.9", codex: "0.51.1" } },
-  { entry: { id: "pi", name: "pi-runner", kind: { kind: "ssh", target: "pi@pi-runner.lan" }, platform: { os: "linux", arch: "aarch64", target: "aarch64-unknown-linux-gnu" }, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false },
+  { entry: { id: "pi", name: "pi-runner", kind: { kind: "ssh", target: "pi@pi-runner.lan" }, platform: { os: "linux", arch: "aarch64", target: "aarch64-unknown-linux-gnu" }, created_at_ms: t0, interactive_auth: false, local_files: false, shared_connection: true, signed_out: false, ask_before_connecting: false },
     link: { state: "provisioning", reason: { kind: "build_mismatch", expected: "0.7.3", found: "0.7.1" } }, drivers: { opencode: "1.3.0" } },
 ];
 

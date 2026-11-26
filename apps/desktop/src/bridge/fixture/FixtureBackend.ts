@@ -55,6 +55,8 @@ interface HostRec {
 
 /** The hub's words for a link it parks until the user asks (`SupervisorHooks::hold`). */
 const HELD_DETAIL = "this host asks you to sign in and no shared connection to it is open: connect it to sign in";
+/** The same when the user set `ask_before_connecting`. */
+const HELD_ASKED_DETAIL = "this host waits for you: it connects only when you connect it (it is set to be asked before connecting)";
 /** The same after the user signed out of the host's shared connection. */
 const SIGNED_OUT_DETAIL = "you signed out of this host: connect it to sign in again";
 
@@ -790,7 +792,8 @@ export class FixtureBackend implements Backend {
   private updateHost(entry: HostEntry): HostEntry {
     const h = this.hosts.get(entry.id);
     if (!h) throw err("not_found", `No host ${entry.id}`);
-    h.def.entry = { ...entry, created_at_ms: h.def.entry.created_at_ms };
+    if (!h.def.link || entry.kind.kind === "local") throw err("invalid_params", "the local host cannot be changed");
+    h.def.entry = { ...entry, created_at_ms: h.def.entry.created_at_ms, ask_before_connecting: !!entry.ask_before_connecting };
     this.fleet({ kind: "host_upserted", host: h.def.entry });
     return h.def.entry;
   }
@@ -902,8 +905,10 @@ export class FixtureBackend implements Backend {
   dropLink(id: HostId, cause: string) {
     const h = this.hosts.get(id)!;
     h.cause = cause;
-    if (h.def.entry.interactive_auth) this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail: HELD_DETAIL, cause, held: true });
-    else this.setLink(id, { state: "reconnecting", attempt: 1, next_at: nextAt(this.opts.now() + 250), last_error: cause });
+    if (h.def.entry.ask_before_connecting || h.def.entry.interactive_auth) {
+      const detail = h.def.entry.ask_before_connecting ? HELD_ASKED_DETAIL : HELD_DETAIL;
+      this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail, cause, held: true });
+    } else this.setLink(id, { state: "reconnecting", attempt: 1, next_at: nextAt(this.opts.now() + 250), last_error: cause });
   }
 
   /**
@@ -913,7 +918,10 @@ export class FixtureBackend implements Backend {
   endAttempt(id: HostId) {
     const h = this.hosts.get(id)!;
     this.setAuthPrompt(id, null);
-    if (h.def.entry.interactive_auth) this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail: HELD_DETAIL, ...(h.cause ? { cause: h.cause } : {}), held: true });
+    if (h.def.entry.ask_before_connecting || h.def.entry.interactive_auth) {
+      const detail = h.def.entry.ask_before_connecting ? HELD_ASKED_DETAIL : HELD_DETAIL;
+      this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail, ...(h.cause ? { cause: h.cause } : {}), held: true });
+    }
   }
 
   /** What the hub learns from a connect that asked the user something: the host signs in interactively. */
@@ -963,8 +971,8 @@ export class FixtureBackend implements Backend {
   private tick() {
     const n = ++this.tickN;
     const win = this.hosts.get("win")!;
-    if (win.def.link?.state === "reconnecting" && n > 15) this.setLink("win", connected("win"));
-    else if (win.def.link?.state === "reconnecting" && n % 5 === 0) this.setLink("win", { ...win.def.link, attempt: win.def.link.attempt + 1, next_at: nextAt(this.opts.now() + 4000) });
+    if (win.def.link?.state === "reconnecting" && !win.def.entry.ask_before_connecting && n > 15) this.setLink("win", connected("win"));
+    else if (win.def.link?.state === "reconnecting" && !win.def.entry.ask_before_connecting && n % 5 === 0) this.setLink("win", { ...win.def.link, attempt: win.def.link.attempt + 1, next_at: nextAt(this.opts.now() + 4000) });
     if (n === 8) this.setLink("pi", connected("pi"));
     const x1 = this.hosts.get("x1")!;
     for (const e of x1.sessions.values()) {

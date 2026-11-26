@@ -79,6 +79,11 @@ pub struct HostEntry {
     /// local host). Two hosts with the same key are the same machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// The user wants to be asked before this host connects: the hub never connects it on its own
+    /// (after a start, a drop or a route change), the host is held in `held` until the user
+    /// connects it (`hosts.reconnect`). Set by the user (`hosts.update`); `false` by default.
+    #[serde(default)]
+    pub ask_before_connecting: bool,
 }
 
 impl HostEntry {
@@ -143,6 +148,25 @@ impl PromptKind {
     /// security-key notices), nor for a password or a passphrase.
     pub fn is_host_key_confirmation(prompt: &str) -> bool {
         prompt.contains("continue connecting (yes/no") || prompt.starts_with("Please type 'yes'")
+    }
+
+    /// Whether `answer` to the host-key question `prompt` makes ssh trust the key: `yes`, or the
+    /// key's fingerprint as the question printed it (`... key fingerprint is SHA256:x.`), in any
+    /// case and around spaces. Anything else (no, nothing, a wrong fingerprint) is not an
+    /// acceptance, and ssh asks again or gives up. Pure.
+    pub fn accepts_host_key(prompt: &str, answer: &str) -> bool {
+        if !Self::is_host_key_confirmation(prompt) {
+            return false;
+        }
+        let answer = answer.trim();
+        if answer.eq_ignore_ascii_case("yes") {
+            return true;
+        }
+        let fingerprint = prompt
+            .split_once("key fingerprint is ")
+            .and_then(|(_, rest)| rest.split(['.', ' ', '\n']).next())
+            .filter(|f| !f.is_empty());
+        fingerprint.is_some_and(|f| f == answer)
     }
 
     pub fn guess(prompt: &str) -> PromptKind {
@@ -563,6 +587,29 @@ mod prompt_tests {
             assert!(PromptKind::guess(p).needs_user(), "{p}");
         }
     }
+
+    /// Requirement 2 (E3): a host key is accepted by `yes` or by the printed fingerprint; a
+    /// refusal, an empty answer or a wrong fingerprint is not. Red without [`PromptKind::accepts_host_key`].
+    #[test]
+    fn a_host_key_is_accepted_by_yes_or_its_fingerprint_only() {
+        let question = HOST_KEY[0];
+        for yes in ["yes", "YES", " yes "] {
+            assert!(PromptKind::accepts_host_key(question, yes), "{yes:?}");
+        }
+        assert!(PromptKind::accepts_host_key(question, "SHA256:abc"));
+        assert!(PromptKind::accepts_host_key(question, " SHA256:abc\n"));
+        for no in ["no", "", "maybe", "SHA256:xyz", "sha256:abc", "yes please"] {
+            assert!(!PromptKind::accepts_host_key(question, no), "{no:?}");
+        }
+        // Only ssh's own question: a site's question with the same answer is not a host key.
+        assert!(!PromptKind::accepts_host_key(
+            "Do you accept the terms of use (yes/no)?",
+            "yes"
+        ));
+        // The repeat after a wrong answer has no fingerprint to type, only yes or no.
+        assert!(PromptKind::accepts_host_key(HOST_KEY[3], "yes"));
+        assert!(!PromptKind::accepts_host_key(HOST_KEY[3], "no"));
+    }
 }
 
 #[cfg(test)]
@@ -611,6 +658,7 @@ mod shared_connection_tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -618,5 +666,35 @@ mod shared_connection_tests {
         };
         e.derive_local_files();
         assert_eq!(e.shared_connection, !cfg!(windows));
+    }
+
+    /// G4: the mark is read from the hub's records and the UI's entries, and a record written
+    /// before it existed (or an entry that omits it) is not asked for.
+    #[test]
+    fn the_ask_before_connecting_mark_defaults_to_off() {
+        let entry = HostEntry {
+            id: "h".into(),
+            name: "h".into(),
+            kind: HostKind::Local,
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            ask_before_connecting: true,
+            local_files: false,
+            shared_connection: false,
+            signed_out: false,
+            machine: None,
+        };
+        let mut base = serde_json::to_value(&entry).unwrap();
+        // A record from before the mark existed has no such key.
+        base.as_object_mut()
+            .unwrap()
+            .remove("ask_before_connecting");
+        let old: HostEntry = serde_json::from_value(base.clone()).unwrap();
+        assert!(!old.ask_before_connecting);
+        let mut asked = base;
+        asked["ask_before_connecting"] = serde_json::json!(true);
+        let asked: HostEntry = serde_json::from_value(asked).unwrap();
+        assert!(asked.ask_before_connecting);
     }
 }

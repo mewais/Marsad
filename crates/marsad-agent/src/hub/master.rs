@@ -120,7 +120,8 @@ struct Ran {
 /// it could not be started, or did not end in time.
 async fn run_local(argv: Vec<String>) -> Result<Ran, String> {
     let mut spec = CommandSpec::new(argv);
-    // ssh prints errno texts: ask for English, as the words below are matched.
+    // Every ssh command of the hub runs in English: its messages are shown to the user, and the
+    // same words must be the ones an operator greps for in the logs.
     spec.env = vec![("LC_ALL".into(), "C".into())];
     let (_io, child) = CommandTransport::spawn(&spec).map_err(|e| e.to_string())?;
     match child.wait_exit(CLOSED_EXIT_WAIT).await {
@@ -142,20 +143,49 @@ enum SocketGone {
     Refused,
 }
 
-/// Reads ssh's own `Control socket connect(<path>): <error>` line, the only line that says the
-/// socket has no master behind it. Other lines of ssh's output may contain the same error texts
-/// (ssh's askpass helper that is not installed, say) and must not make a master look absent: a
-/// master that answers nothing is [`Check::Unanswered`], not absent.
-fn socket_gone(stderr: &str) -> Option<SocketGone> {
-    let line = stderr
-        .lines()
-        .find(|l| l.trim_start().starts_with("Control socket connect("))?;
-    if line.contains("Connection refused") {
-        Some(SocketGone::Refused)
-    } else if line.contains("No such file or directory") {
-        Some(SocketGone::Missing)
-    } else {
-        None
+/// Asks the socket itself whether a master listens behind it, once `ssh -O` has failed to get an
+/// answer: `Some` when none does (ssh's own report of that condition is English words, and the
+/// decision is not made from them; the kernel's answer to a connect is the same fact), `None`
+/// when one accepts (a busy or wedged master: unanswered, not absent). `Err`: the socket could
+/// not be asked, which is unanswered too.
+///
+/// WHY a connect and not ssh's text: ssh says "Control socket connect(...)" with an errno in
+/// words, which differs by platform and by ssh version, and other ssh messages may repeat the
+/// same errno texts. The probe connects and drops the connection at once; a master drops it
+/// without a message.
+async fn listener_gone(control: &Path) -> Result<Option<SocketGone>, String> {
+    match connect_probe(control).await {
+        Ok(()) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Some(SocketGone::Missing)),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            Ok(Some(SocketGone::Refused))
+        }
+        Err(e) => Err(format!("{}: {e}", control.display())),
+    }
+}
+
+/// Connects to `control` and drops the connection at once (`Ok`: something accepted it). Errors
+/// are the connect's own.
+#[cfg(unix)]
+async fn connect_probe(control: &Path) -> std::io::Result<()> {
+    tokio::net::UnixStream::connect(control).await.map(drop)
+}
+
+/// Shared connections are a Unix thing ([`Masters::AVAILABLE`]): nothing listens anywhere else.
+#[cfg(not(unix))]
+async fn connect_probe(_control: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other(
+        "shared connections need Unix sockets",
+    ))
+}
+
+/// The socket a master does not listen on is removed (ssh would refuse to listen on it, and a
+/// removed socket is the same news as a missing one), unless it was already gone.
+async fn remove_gone_socket(host: &HostId, control: &Path) {
+    if let Err(e) = tokio::fs::remove_file(control).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            fs_failed(host, &e);
+        }
     }
 }
 
@@ -423,33 +453,32 @@ impl Masters {
         };
         match run_local(argv).await {
             Ok(Ran { exit: Some(0), .. }) => (MasterState::Alive, None, Check::Alive),
-            // Nothing listens: the master was killed and left its socket. Or the socket went away
-            // between the look above and ssh's connect: the master exited as it was checked, which
-            // is the same news (the connection ended). Both are `Absent`, so the end is recorded.
-            Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => {
-                if let Err(e) = tokio::fs::remove_file(control).await {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        fs_failed(&entry.id, &e);
-                    }
+            Ok(Ran { exit, stderr }) => match listener_gone(control).await {
+                // Nothing listens: the master was killed and left its socket. Or the socket went
+                // away between the look above and ssh's connect: the master exited as it was
+                // checked, which is the same news (the connection ended). Both are `Absent`, so
+                // the end is recorded.
+                Ok(Some(gone)) => {
+                    remove_gone_socket(&entry.id, control).await;
+                    let state = match gone {
+                        SocketGone::Refused => MasterState::Stale,
+                        SocketGone::Missing => MasterState::Absent,
+                    };
+                    (state, None, Check::Absent)
                 }
-                let state = match socket_gone(&stderr) {
-                    Some(SocketGone::Refused) => MasterState::Stale,
-                    _ => MasterState::Absent,
-                };
-                (state, None, Check::Absent)
-            }
-            Ok(Ran { exit, stderr }) => {
-                let words = if stderr.is_empty() {
-                    format!("ssh -O check ended with {exit:?}")
-                } else {
-                    stderr
-                };
-                (
-                    MasterState::Unanswered,
-                    Some(words.clone()),
-                    Check::Unanswered(words),
-                )
-            }
+                Ok(None) | Err(_) => {
+                    let words = if stderr.is_empty() {
+                        format!("ssh -O check ended with {exit:?}")
+                    } else {
+                        stderr
+                    };
+                    (
+                        MasterState::Unanswered,
+                        Some(words.clone()),
+                        Check::Unanswered(words),
+                    )
+                }
+            },
             Err(words) => (
                 MasterState::Unanswered,
                 Some(words.clone()),
@@ -531,20 +560,18 @@ impl Masters {
                         record(MasterExitOutcome::Ended, Some(0), None);
                         MasterExitOutcome::Ended
                     }
-                    Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => {
+                    Ok(Ran { exit, stderr }) => match listener_gone(&control).await {
                         // A socket nobody listens on: there was no connection.
-                        if let Err(e) = tokio::fs::remove_file(&control).await {
-                            if e.kind() != std::io::ErrorKind::NotFound {
-                                fs_failed(&entry.id, &e);
-                            }
+                        Ok(Some(_)) => {
+                            remove_gone_socket(&entry.id, &control).await;
+                            record(MasterExitOutcome::NoMaster, None, None);
+                            MasterExitOutcome::NoMaster
                         }
-                        record(MasterExitOutcome::NoMaster, None, None);
-                        MasterExitOutcome::NoMaster
-                    }
-                    Ok(Ran { exit, stderr }) => {
-                        record(MasterExitOutcome::Failed, exit, Some(&stderr));
-                        MasterExitOutcome::Failed
-                    }
+                        Ok(None) | Err(_) => {
+                            record(MasterExitOutcome::Failed, exit, Some(&stderr));
+                            MasterExitOutcome::Failed
+                        }
+                    },
                     Err(words) => {
                         record(MasterExitOutcome::Failed, None, Some(&words));
                         MasterExitOutcome::Failed
@@ -628,11 +655,13 @@ impl Masters {
         };
         let alive = match checked {
             Ok(Ran { exit: Some(0), .. }) => true,
-            Ok(Ran { stderr, .. }) if socket_gone(&stderr).is_some() => false,
-            Ok(Ran { exit, stderr }) => {
-                record(MasterExitOutcome::Failed, exit, Some(&stderr));
-                return;
-            }
+            Ok(Ran { exit, stderr }) => match listener_gone(socket).await {
+                Ok(Some(_)) => false,
+                Ok(None) | Err(_) => {
+                    record(MasterExitOutcome::Failed, exit, Some(&stderr));
+                    return;
+                }
+            },
             Err(words) => {
                 record(MasterExitOutcome::Failed, None, Some(&words));
                 return;
@@ -979,6 +1008,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: true,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -1032,5 +1062,27 @@ mod tests {
         let t = last_lines(&long);
         assert!(t.starts_with('…') && t.ends_with("end"), "{t}");
         assert_eq!(t.chars().count(), LOG_TAIL_CHARS + 1);
+    }
+
+    /// The state of a control socket is asked of the socket: a path with no socket is absent, a
+    /// socket file that nobody listens on is refused (a killed master), and one something accepts
+    /// on is not gone (a master that did not answer its check).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_socket_is_gone_when_nothing_listens_behind_it() {
+        let dir = std::env::temp_dir().join(format!("mrs-listen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let missing = dir.join("missing");
+        assert_eq!(listener_gone(&missing).await, Ok(Some(SocketGone::Missing)));
+        let stale = dir.join("stale");
+        // Dropping the listener leaves its socket file behind, with nobody listening.
+        drop(tokio::net::UnixListener::bind(&stale).expect("bind"));
+        assert_eq!(listener_gone(&stale).await, Ok(Some(SocketGone::Refused)));
+        let live = dir.join("live");
+        let listener = tokio::net::UnixListener::bind(&live).expect("bind");
+        assert_eq!(listener_gone(&live).await, Ok(None));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
 import { askWords, backgroundWords, driverVersionState, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, signOutPendingKey, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
-import { Button, ConfirmDialog, ConnState, ConnectingWords, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
+import { Button, Checkbox, ConfirmDialog, ConnState, ConnectingWords, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, feedReason, linkSub } from "./linkText";
 import { SignInButton } from "./SignInButton";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
@@ -23,6 +23,8 @@ export function HostDetail({ host }: { host: HostView }) {
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const busy = !!usePending(reconnectPendingKey(host.id));
   const signingOut = !!usePending(signOutPendingKey(host.id));
+  const askPendingKey = `ask_before_connecting:${host.id}`;
+  const updatingAsk = !!usePending(askPendingKey);
   const queue = useSignInQueue();
   const now = useNow(true);
   const lv = linkView(host.link, host.authPrompt, now);
@@ -54,6 +56,19 @@ export function HostDetail({ host }: { host: HostView }) {
       <div className="gate"><div className="gate-h"><Icon name="key" size="sm" />{host.name} has a question for you</div>
         <div className="small">{host.name} asked for {askWords(host.authPrompt.kind)}. {ahead <= 0 ? "Answer it in the sign-in dialog." : `It is asked after ${ahead === 1 ? "one other question" : `${ahead} other questions`} in the sign-in dialog.`}</div></div>
     );
+  } else if (st?.state === "provisioning" || st?.state === "connecting") {
+    card = (
+      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{st.state === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} /> : lv.detail}</div>
+        <div className="small">{st.state === "provisioning" ? (st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol.") : "Opening the connection."}</div>
+        <div className="bar w indet" aria-hidden="true"><i /></div></div>
+    );
+  } else if (host.askBeforeConnecting && st && !lv.connected) {
+    card = (
+      <div className="gate" data-testid="host-held"><div className="gate-h"><Icon name="key" size="sm" />Waiting for you to connect</div>
+        <div className="small">{droppedWords(host.name, st.state === "auth_needed" ? st.cause : st.state === "reconnecting" ? st.last_error : undefined)} Marsad will not connect this host on its own because "Ask me before connecting" is on.</div>
+        {st.state === "auth_needed" && st.held && st.detail ? <div className="small faint" data-testid="held-detail">{st.detail.replace(/[.\s]+$/, "").replace(/^./, (c) => c.toUpperCase())}.</div> : null}
+        <div className="acts"><SignInButton host={host} label={host.interactiveAuth ? "Sign in" : "Connect"} /></div></div>
+    );
   } else if (st?.state === "auth_needed" && st.held) {
     card = (
       <div className="gate" data-testid="host-held"><div className="gate-h"><Icon name="key" size="sm" />Needs you to sign in</div>
@@ -75,12 +90,6 @@ export function HostDetail({ host }: { host: HostView }) {
     card = (
       <div className="gate"><div className="gate-h"><Icon name="refresh" size="sm" />{lv.detail}</div><div className="small">The connection dropped ({st.last_error}). Sessions keep running on the machine; Marsad catches up on their output when it reconnects. Attempt {st.attempt}.</div>
         <div className="acts"><Button size="sm" icon="refresh" pending={busy} blocked={reach} onClick={reconnect}>Retry now</Button></div></div>
-    );
-  } else if (st?.state === "provisioning" || st?.state === "connecting") {
-    card = (
-      <div className="gate info"><div className="gate-h"><Icon name="working" size="sm" spin />{st.state === "connecting" ? <ConnectingWords stage={st.stage} since={st.since_ms} /> : lv.detail}</div>
-        <div className="small">{st.state === "provisioning" ? (st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol.") : "Opening the connection."}</div>
-        <div className="bar w indet" aria-hidden="true"><i /></div></div>
     );
   } else if (st?.state === "failed" && st.problem === "unknown_distro" && entry?.kind.kind === "wsl") {
     card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><FixDistro hostId={host.id} hostName={host.name} /></div>;
@@ -104,6 +113,17 @@ export function HostDetail({ host }: { host: HostView }) {
           <dt>Sign-in</dt><dd>{host.interactiveAuth || host.authPrompt ? (host.sharedConnection ? "Interactive (asks when it signs in; the connection then stays open)" : "Interactive (asks each time)") : host.local ? "Not needed" : "Key or agent"}</dd>
           {host.sharedConnection && lv.connected ? <><dt>Connection</dt><dd>Kept open and shared, until you sign out or it ends</dd></> : null}
         </dl>
+        {!host.local && entry ? (
+          <div className="hd-ask">
+            <Checkbox
+              label="Ask me before connecting"
+              hint="Marsad won't connect this host on its own — use this for hosts whose sign-in sends a phone approval."
+              checked={!!entry.ask_before_connecting}
+              disabled={!!reach || updatingAsk}
+              onChange={(ask_before_connecting) => void actions.run(askPendingKey, `Could not update ${host.name}`, () => api.hosts.update({ ...entry, ask_before_connecting }))}
+            />
+          </div>
+        ) : null}
       </div>
       <div>
         <h4 className="eyebrow">Agent CLIs</h4>

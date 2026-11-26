@@ -35,6 +35,25 @@ pub fn ssh_base_options() -> Vec<String> {
     .collect()
 }
 
+/// Options every ssh command of the hub carries, whatever its route, so that a user's
+/// `~/.ssh/config` cannot change what the hub's commands do (G10). `RemoteCommand=none` and
+/// `RequestTTY=no`: the command the hub gives is the only one, and no terminal is asked for.
+/// `ClearAllForwardings`, `ForwardX11=no`, `ForwardAgent=no`: no forwarding from the config can
+/// fail a connection the hub needs, nor hand the host the user's agent. Each is a valid ssh
+/// option for every command built here (`-O` included).
+pub fn ssh_isolation_options() -> Vec<String> {
+    [
+        "RemoteCommand=none",
+        "RequestTTY=no",
+        "ClearAllForwardings=yes",
+        "ForwardX11=no",
+        "ForwardAgent=no",
+    ]
+    .iter()
+    .flat_map(|o| ["-o".to_string(), o.to_string()])
+    .collect()
+}
+
 /// How an ssh command of a host relates to the host's shared connection (Linux and macOS hubs;
 /// see [`SshRoute`]).
 ///
@@ -101,13 +120,6 @@ fn ssh_host_options(
     argv
 }
 
-/// The argv prefix that runs one remote command (appended as the last element), by the same
-/// route a connect attempt without a shared connection uses ([`SshRoute::Plain`]). `None` for
-/// the local host.
-pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
-    transport_prefix_via(kind, SshRoute::Plain)
-}
-
 /// The argv prefix of the ssh command of `route` for `kind` (for a WSL host, whatever the
 /// route: it has no ssh). `None` for the local host.
 pub fn transport_prefix_via(kind: &HostKind, route: SshRoute<'_>) -> Option<Vec<String>> {
@@ -125,6 +137,7 @@ pub fn transport_prefix_via(kind: &HostKind, route: SshRoute<'_>) -> Option<Vec<
                 SshRoute::SignIn { .. } => {}
             }
             argv.extend(ssh_base_options());
+            argv.extend(ssh_isolation_options());
             let o = |s: String| ["-o".to_string(), s];
             match route {
                 SshRoute::Plain => {
@@ -202,6 +215,7 @@ pub fn master_command_argv(
         "-o".to_string(),
         control_option(control),
     ];
+    argv.extend(ssh_isolation_options());
     argv.extend(ssh_host_options(port, identity_file, options));
     argv.push("--".to_string());
     argv.push(target.clone());
@@ -319,7 +333,9 @@ fn boot_args(t: BootTarget<'_>) -> String {
 /// `UPLOAD <n> <sha256>`, writes exactly `n` bytes to a temporary file, checks their number and
 /// their SHA-256, links the file into place (atomic, never over a helper another machine of a shared home
 /// just installed) and hands over to the new helper with
-/// `--installed`. Any failure removes the temporary file and answers `MARSAD-FAIL`. A Windows
+/// `--installed`. Any failure removes the temporary file and answers `MARSAD-FAIL`; a helper
+/// directory the account cannot write is `reason=not_writable` (a structural fact the hub
+/// explains, checked before anything is written). A Windows
 /// port of `sh` (MSYS2, Git for Windows, Cygwin) as the account's default shell: `uname -s`
 /// says so, and the Windows bootstrap runs instead (its path translation off).
 pub fn posix_script(t: BootTarget<'_>) -> String {
@@ -338,7 +354,7 @@ pub fn posix_script(t: BootTarget<'_>) -> String {
         "f() { rm -f \"$t\"; echo \"MARSAD-FAIL stage=install reason=$1\"; echo \"marsad bootstrap: $1\" >&2; exit 70; }; t=; ",
         "[ \"$c\" = UPLOAD ] || f unexpected%20command; ",
         "[ \"$h\" != none ] || f no%20checksum%20tool; ",
-        "t=\"$a.new.$(uname -n).$$\"; mkdir -p \"$b\" || f cannot%20create%20the%20helper%20directory; ",
+        "t=\"$a.new.$(uname -n).$$\"; mkdir -p \"$b\" 2>/dev/null; [ -d \"$b\" ] && [ -w \"$b\" ] || f not_writable; ",
         "head -c \"$n\" > \"$t\" || f cannot%20write%20the%20helper; ",
         "r=$(wc -c < \"$t\" | tr -d \" \"); [ \"$r\" = \"$n\" ] || f received%20$r%20of%20$n%20bytes%20of%20the%20helper; ",
         "case $h in sha256sum) x=$(sha256sum \"$t\");; shasum) x=$(shasum -a 256 \"$t\");; *) x=$(openssl dgst -sha256 -r \"$t\");; esac; x=${x%% *}; ",
@@ -534,6 +550,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: false,
             signed_out: false,
@@ -892,5 +909,41 @@ mod tests {
             assert_ne!(other, same);
         }
         assert_eq!(master_log(&same).file_name().unwrap().len(), 16 + 4);
+    }
+
+    /// G10: every ssh command the hub runs carries the isolation options, on every route, so a
+    /// user's `~/.ssh/config` cannot change what the hub's commands do (a remote command, a
+    /// terminal, a forwarding that fails, the user's agent handed to the host).
+    #[test]
+    fn every_ssh_command_of_the_hub_ignores_the_users_configuration() {
+        let e = entry(HostKind::Ssh {
+            target: "me@box".into(),
+            port: None,
+            identity_file: None,
+            options: vec![],
+        });
+        let ctl = Path::new("/run/m/ssh/0123456789abcdef");
+        let mut argvs = vec![
+            bootstrap_argv_via(&e, T, SshRoute::Plain).unwrap(),
+            bootstrap_argv_via(&e, T, SshRoute::SignIn { control: ctl }).unwrap(),
+            bootstrap_argv_via(&e, T, SshRoute::Link { control: ctl }).unwrap(),
+        ];
+        for what in [MasterCommand::Check, MasterCommand::Exit] {
+            argvs.push(master_command_argv(&e.kind, ctl, what).unwrap());
+        }
+        for argv in &argvs {
+            for o in [
+                "RemoteCommand=none",
+                "RequestTTY=no",
+                "ClearAllForwardings=yes",
+                "ForwardX11=no",
+                "ForwardAgent=no",
+            ] {
+                assert!(
+                    argv.windows(2).any(|w| w[0] == "-o" && w[1] == o),
+                    "{o} in {argv:?}"
+                );
+            }
+        }
     }
 }

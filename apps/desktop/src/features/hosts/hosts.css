@@ -22,6 +22,7 @@
 .hd .gate.info{border-color:var(--working-line);background:var(--working-bg)}
 .hd .gate.info .gate-h{color:var(--working)}
 .hd-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
+.hd-ask{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .hbtn{border:0;background:transparent;color:inherit;font:inherit;text-align:left;width:100%;cursor:pointer}
 .hbtn:hover{background:var(--surface-2)}
 .mt6{margin-top:6px}

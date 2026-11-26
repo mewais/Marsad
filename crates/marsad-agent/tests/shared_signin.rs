@@ -181,6 +181,7 @@ impl Rig {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            ask_before_connecting: false,
             local_files: false,
             shared_connection: true,
             signed_out: false,
@@ -390,23 +391,18 @@ fn an_authenticated_ssh_without_its_socket_stays_ours_until_sign_out() {
     let rig = Rig::new();
     let authed = rig.fifo("authed");
     let gate = rig.fifo("gate");
-    let fwd = rig.d.path().join("fwd.sock");
     run(async {
-        // ssh in its main loop is seen by a forwarded connection reaching this listener: ssh
-        // binds `fwd` before it runs its `LocalCommand`, but only accepts on it in the loop,
-        // which under `-f` only the forked background process reaches.
-        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = target.local_addr().unwrap().port();
+        // Not a forwarding: the hub's ssh commands ignore the configuration's forwardings
+        // (`ClearAllForwardings`, which ssh applies to command-line `-L` too), so the connected
+        // state is shown by the `LocalCommand` alone. It runs once ssh authenticated, before it
+        // would detach or fork, and holds ssh until the test opens the gate.
         let options = [
             "PermitLocalCommand=yes".to_owned(),
-            // Run once ssh authenticated, before it would detach or fork: says ssh's pid and
-            // holds ssh until the test opens the gate.
             format!(
                 "LocalCommand=echo $PPID > {} && read go < {}",
                 authed.display(),
                 gate.display()
             ),
-            format!("LocalForward={} 127.0.0.1:{port}", fwd.display()),
         ];
         let generation = rig.masters.begin_signin(&rig.entry, &rig.control).await;
         // Something that is not a socket where the socket goes: ssh cannot share the connection.
@@ -418,9 +414,7 @@ fn an_authenticated_ssh_without_its_socket_stays_ours_until_sign_out() {
         let user = async {
             let pid: u32 = line_of(&authed).await.parse().unwrap();
             tokio::fs::write(&gate, "go\n").await.unwrap();
-            let _client = tokio::net::UnixStream::connect(&fwd).await.unwrap();
-            let _forwarded = target.accept().await.unwrap();
-            // ssh is in its main loop, connected, with no shared connection. The process that
+            // ssh is authenticated, connected, with no shared connection. The process that
             // signed in is that one, still running in the foreground (under `-f` it exited
             // right after its fork, long before a forwarded connection gets this far).
             assert!(

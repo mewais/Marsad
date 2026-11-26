@@ -12,7 +12,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
-use marsad_client::{MarsadClient, Subscription};
+use marsad_client::MarsadClient;
 use marsad_proto::agentconfig::{LaunchRequest, LayerScope, OverrideLayer};
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::hosts::HostDraft;
@@ -53,47 +53,18 @@ fn orch_node(dir: &Path) -> WorkstreamNode {
     WorkstreamNode::launched("orch", "orchestrator", l)
 }
 
-/// Follows the `workstreams` topic, keeping the latest view of each workstream.
+/// Waits on a workstream's view as the hub has it. Each wait opens its own subscription to the
+/// `workstreams` topic: its first event is the topic's reset (the current state), so a wait
+/// starts from what is true now and never from events queued before it, nor from a map that
+/// earlier waits kept (the host_feeds settle pattern). A change after the reset is an event of
+/// this subscription, so none is missed.
 struct Views {
-    sub: Subscription<WorkstreamsEvent>,
-    views: BTreeMap<String, WorkstreamView>,
+    client: MarsadClient,
 }
 
 impl Views {
-    async fn new(c: &MarsadClient) -> Views {
-        let mut sub = c.workstreams_topic(None);
-        let mut views = BTreeMap::new();
-        // Seed the view from the first event already in the queue (typically the reset that
-        // carries the current state) so a wait that starts after the events were published does
-        // not sit on an empty map forever.
-        tokio::time::timeout(Duration::from_secs(120), async {
-            loop {
-                match sub.next().await {
-                    Some(Ok((_, ev))) => {
-                        match ev {
-                            WorkstreamsEvent::Reset { workstreams } => {
-                                views = workstreams
-                                    .into_iter()
-                                    .map(|v| (v.workstream.id.clone(), v))
-                                    .collect();
-                            }
-                            WorkstreamsEvent::Upserted { workstream } => {
-                                views.insert(workstream.workstream.id.clone(), *workstream);
-                            }
-                            WorkstreamsEvent::Removed { id } => {
-                                views.remove(&id);
-                            }
-                        }
-                        break;
-                    }
-                    Some(Err(_)) => continue,
-                    None => panic!("workstreams topic ended before a reset"),
-                }
-            }
-        })
-        .await
-        .expect("no workstreams event to seed the view");
-        Views { sub, views }
+    fn new(c: &MarsadClient) -> Views {
+        Views { client: c.clone() }
     }
 
     async fn until(
@@ -103,14 +74,13 @@ impl Views {
         pred: impl Fn(&WorkstreamView) -> bool,
     ) -> WorkstreamView {
         eprintln!("waiting for {what}");
+        // The view the wait last saw, for the panic if it never comes.
+        let seen: std::cell::RefCell<Option<WorkstreamView>> = std::cell::RefCell::new(None);
         let fut = async {
+            let mut sub = self.client.workstreams_topic(None);
+            let mut views: BTreeMap<String, WorkstreamView> = BTreeMap::new();
             loop {
-                if let Some(v) = self.views.get(id) {
-                    if pred(v) {
-                        return v.clone();
-                    }
-                }
-                let ev = match self.sub.next().await {
+                let ev = match sub.next().await {
                     Some(Ok((_, e))) => e,
                     // The hub restarted: the subscription resumes.
                     Some(Err(_)) => continue,
@@ -118,24 +88,34 @@ impl Views {
                 };
                 match ev {
                     WorkstreamsEvent::Reset { workstreams } => {
-                        self.views = workstreams
+                        views = workstreams
                             .into_iter()
                             .map(|v| (v.workstream.id.clone(), v))
                             .collect();
                     }
                     WorkstreamsEvent::Upserted { workstream } => {
-                        self.views
-                            .insert(workstream.workstream.id.clone(), *workstream);
+                        views.insert(workstream.workstream.id.clone(), *workstream);
                     }
                     WorkstreamsEvent::Removed { id } => {
-                        self.views.remove(&id);
+                        views.remove(&id);
+                    }
+                }
+                *seen.borrow_mut() = views.get(id).cloned();
+                if let Some(v) = views.get(id) {
+                    if pred(v) {
+                        return v.clone();
                     }
                 }
             }
         };
         tokio::time::timeout(Duration::from_secs(120), fut)
             .await
-            .unwrap_or_else(|_| panic!("timed out waiting for {what}: {:#?}", self.views.get(id)))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for {what}: {:#?}",
+                    seen.borrow().as_ref()
+                )
+            })
     }
 }
 
@@ -359,7 +339,7 @@ async fn spawn_across_local_and_ssh_host() {
         })
         .await
         .unwrap();
-    let mut views = Views::new(&c).await;
+    let mut views = Views::new(&c);
     let launched = c.launch_workstream(&ws.id).await.unwrap();
     let orch = session_of(&launched.workstream, "orch");
     let cwd = work.to_string_lossy().into_owned();
@@ -958,7 +938,7 @@ async fn the_workstream_view_lists_how_spawn_requests_ended() {
         })
         .await
         .unwrap();
-    let mut views = Views::new(&c).await;
+    let mut views = Views::new(&c);
     let launched = c.launch_workstream(&ws.id).await.unwrap();
     let orch = session_of(&launched.workstream, "orch");
     wait_snap(&c, &orch, "idle", |s| s.phase.name() == "idle").await;
@@ -1062,7 +1042,7 @@ async fn the_workstream_view_lists_how_spawn_requests_ended() {
 
     // 4. A hub restart: the view lists the same endings again, rebuilt from the node's journal.
     stop_hub(&c).await;
-    let mut views = Views::new(&c).await;
+    let mut views = Views::new(&c);
     let v = views
         .until(&ws.id, "the endings after the hub restarted", |v| {
             v.recent_spawns.len() == 3
