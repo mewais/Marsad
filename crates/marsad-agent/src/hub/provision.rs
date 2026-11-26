@@ -133,10 +133,10 @@ pub struct BootstrapConnector {
 
 /// The link command (the transport child that carries a host's bootstrap and then its protocol)
 /// of each host's latest attempt. A reconnect starts its command only once the previous one has
-/// ended: a server that allows one session at a time (`MaxSessions 1`) refuses the second while
-/// the first is open. The wait is for the child's own exit event, with no timer; the child ends
-/// when its stdio is closed (the attempt's client is gone) or its connection dies (ssh's
-/// keep-alives end that).
+/// exited: a server that allows one session at a time (`MaxSessions 1`) refuses the second while
+/// the first is open. The previous command is being replaced, so it is ended explicitly
+/// (SIGKILL, which a wedged ssh cannot ignore) rather than left to end on its own; the wait for
+/// its exit event then has no timer and completes once the kill has been delivered.
 #[derive(Default)]
 pub struct LinkChildren {
     by_host: Mutex<HashMap<HostId, Arc<ChildHandle>>>,
@@ -153,15 +153,50 @@ impl LinkChildren {
         locked(&self.by_host).contains_key(host)
     }
 
-    /// Resolves once `host`'s previous link command has exited (at once when there is none). The
-    /// command is taken from the table when this is first polled, so a second attempt never waits
-    /// for the same exit twice.
+    /// Ends `host`'s previous link command and resolves once it has exited (at once when there is
+    /// none). The command is taken from the table when this is first polled, so a second attempt
+    /// never waits for the same exit twice.
     pub async fn settle(&self, host: &HostId) {
         let previous = locked(&self.by_host).remove(host);
         if let Some(child) = previous {
+            end_link(&child).await;
             child.wait_exit_unbounded().await;
         }
     }
+}
+
+/// Kills a link command that has not exited yet, by its pid. Only that child's pid is used: the
+/// child is not a process-group leader, and no process is found by name. The pid is ours until
+/// the child's exit is recorded, because its waiter task reaps the child only then, so the pid
+/// cannot have been reused in the meantime.
+async fn end_link(child: &ChildHandle) {
+    if child.exit().is_some() {
+        return;
+    }
+    if let Some(pid) = child.pid() {
+        kill_pid(pid).await;
+    }
+}
+
+/// Force-kills the process `pid` (SIGKILL on Unix, `taskkill /F` on Windows: the same forced kill
+/// Wasit's own tests use). A kill that fails because the process already ended is not an error,
+/// and the caller waits for the exit event either way.
+async fn kill_pid(pid: u32) {
+    let pid_arg = pid.to_string();
+    #[cfg(unix)]
+    let mut cmd = wasit_process::command("kill");
+    #[cfg(unix)]
+    cmd.args(["-KILL", &pid_arg]);
+    #[cfg(windows)]
+    let mut cmd = wasit_process::command("taskkill");
+    #[cfg(windows)]
+    cmd.args(["/F", "/PID", &pid_arg]);
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
 }
 
 fn cmd_err(
@@ -2533,6 +2568,31 @@ mod tests {
             !links.pending(&host),
             "the previous command is waited for once"
         );
+    }
+
+    /// A previous link command that ignores hangup and termination and never ends on its own (a
+    /// wedged ssh) is ended by the reconnect, which then proceeds. Its stdin stays open, so
+    /// closing the stream does not end it either. The timeout is only the test's guard: a
+    /// regression fails here instead of hanging the suite.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_reconnect_ends_a_wedged_previous_link_command() {
+        let links = LinkChildren::default();
+        let host = HostId::new("h");
+        let spec = CommandSpec::new(["sh", "-c", "trap '' HUP TERM; while :; do sleep 0.1; done"]);
+        let (io, child) = CommandTransport::spawn(&spec).expect("sh starts");
+        let child = Arc::new(child);
+        links.remember(&host, child.clone());
+        assert!(child.exit().is_none(), "the wedged command is running");
+        tokio::time::timeout(Duration::from_secs(20), links.settle(&host))
+            .await
+            .expect("the reconnect proceeds once the wedged command is ended");
+        assert!(
+            child.exit().is_some(),
+            "the previous command has exited before the next attempt starts"
+        );
+        assert!(!links.pending(&host));
+        drop(io);
     }
 
     /// The connector of the tests: `entry` is its only host.
