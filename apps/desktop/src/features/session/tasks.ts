@@ -41,8 +41,6 @@ export function subagentState(s: { running: boolean; outcome?: TaskOutcome | nul
 /** What a task is called: its description, else the agent's word for its kind. */
 export const taskLabel = (t: { description?: string; kind: string }): string => t.description || t.kind;
 
-/** How long it has run (running: until `now`), or ran. */
-export const taskElapsedMs = (t: { started_at_ms: number; ended_at_ms?: number | null; running: boolean }, now: number): number => Math.max(0, (t.running ? now : t.ended_at_ms ?? now) - t.started_at_ms);
 
 /** The session's subagents: the running ones first, then the finished, each newest first. */
 export function orderSubagents(list: readonly SubagentInfo[]): SubagentInfo[] {

@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { linkView, type HostView } from "../state/hosts";
 import type { FleetLink } from "../bridge/wire";
-import { Elapsed } from "../features/session/SessionWork";
 import { Icon, type IconName } from "./Icon";
+import { Elapsed, useNow } from "./Elapsed";
 
 /**
  * A connect in progress, in words: "Connecting · <stage> · <elapsed>" (the elapsed clock runs from
@@ -16,17 +15,6 @@ export function ConnectingWords({ stage, since }: { stage?: string; since?: numb
 export function hostIcon(h: Pick<HostView, "local" | "os" | "kind">): IconName {
   if (h.os === "windows" || h.kind.kind === "wsl") return "monitor";
   return h.local ? "laptop" : "server";
-}
-
-/** Re-render every `ms` while `on` (countdowns). */
-export function useNow(on: boolean, ms = 1000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!on) return;
-    const h = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(h);
-  }, [on, ms]);
-  return now;
 }
 
 /** The link state in words, never just a dot. */

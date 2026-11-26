@@ -1,16 +1,9 @@
 import { memo } from "react";
 import type { SessionKey, SessionSnapshot, SubagentInfo, SubagentSupport, TaskInfo } from "../../bridge/wire";
-import { elapsed } from "../../lib/format";
 import { Link, sessionPath } from "../../router";
 import { stopTaskPendingKey, useActions, useAppState, usePending, useSessionReach, useSessionView } from "../../state";
-import { Button, Icon, STATUS, useNow } from "../../ui";
-import { otherBackgroundTasks, subagentFacts, subagentState, taskElapsedMs, taskLabel, type SubagentState } from "./tasks";
-
-/** How long a task or subagent has run (it ticks while it runs) or ran. */
-export function Elapsed({ t }: { t: { started_at_ms: number; ended_at_ms?: number | null; running: boolean } }) {
-  const now = useNow(t.running);
-  return <>{elapsed(taskElapsedMs(t, now))}</>;
-}
+import { Button, Elapsed, Icon, STATUS } from "../../ui";
+import { otherBackgroundTasks, subagentFacts, subagentState, taskLabel, type SubagentState } from "./tasks";
 
 /** The icon and colour class of a subagent's state. Stopped and unknown read as neutral, not as a failure or a success. */
 export const subagentIcon = (st: SubagentState) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentInfo, TaskInfo } from "../../src/bridge/wire";
-import { NO_SUBAGENT_SUPPORT, orderSubagents, otherBackgroundTasks, originWords, subagentFacts, subagentState, taskElapsedMs, taskEndedWords, taskStartedWords } from "../../src/features/session/tasks";
+import { NO_SUBAGENT_SUPPORT, orderSubagents, otherBackgroundTasks, originWords, subagentFacts, subagentState, taskEndedWords, taskStartedWords } from "../../src/features/session/tasks";
+import { taskElapsedMs } from "../../src/ui/Elapsed";
 import { elapsed } from "../../src/lib/format";
 import { parseRoute, sessionPath } from "../../src/router";
 

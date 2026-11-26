@@ -5,6 +5,7 @@ export * from "./Kbd";
 export * from "./StatusPill";
 export * from "./status";
 export * from "./DriverBadge";
+export * from "./Elapsed";
 export * from "./HostChip";
 export * from "./Segmented";
 export * from "./Tabs";
